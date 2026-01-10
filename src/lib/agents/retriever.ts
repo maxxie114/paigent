@@ -64,8 +64,8 @@ export async function discoverTools(params: {
   }
 
   try {
-    // Generate query embedding
-    const queryEmbedding = await generateEmbedding(query, "query");
+    // Generate query embedding using the query input type for optimized retrieval
+    const queryEmbedding = await generateEmbedding(query, { inputType: "query" });
 
     const db = await getDb();
 

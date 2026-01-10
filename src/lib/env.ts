@@ -34,6 +34,12 @@ const serverEnvSchema = z.object({
   /** Galileo API key for observability (optional but recommended). */
   GALILEO_API_KEY: z.string().optional(),
 
+  /** Galileo project name for observability (optional but recommended). */
+  GALILEO_PROJECT: z.string().optional(),
+
+  /** Galileo log stream name for observability (optional but recommended). */
+  GALILEO_LOG_STREAM: z.string().optional(),
+
   /** Secret for authenticating Vercel Cron requests. */
   CRON_SECRET: z.string().min(1, "CRON_SECRET is required"),
 

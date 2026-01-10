@@ -135,7 +135,15 @@ export type ToolDocument = {
   reputation: ToolReputation;
   /** Pricing hints from last 402 response. */
   pricingHints?: ToolPricingHints;
-  /** Vector embedding for search (1024 dimensions for voyage-large-2). */
+  /**
+   * Vector embedding for semantic search.
+   *
+   * @description Generated using VoyageAI embeddings for tool discovery
+   * via MongoDB Atlas Vector Search.
+   *
+   * Default dimension is 1024 using voyage-3-large model.
+   * Compatible with flexible dimensions (2048, 1024, 512, 256) if configured.
+   */
   embedding?: number[];
   /** Creation timestamp. */
   createdAt: Date;

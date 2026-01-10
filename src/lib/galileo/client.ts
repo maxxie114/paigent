@@ -1,306 +1,571 @@
 /**
  * Galileo Observability Client
  *
- * @description Client for logging LLM and tool calls to Galileo.
- * Provides tracing and evaluation capabilities.
+ * @description Official Galileo SDK integration for logging LLM and tool calls.
+ * Provides tracing, evaluation, and observability capabilities for AI workflows.
  *
- * @see https://www.galileo.ai/
+ * @see https://v2docs.galileo.ai/sdk-api/typescript/sdk-reference
+ * @see https://v2docs.galileo.ai/sdk-api/logging/galileo-logger
  */
 
-/**
- * Galileo API endpoint.
- */
-const GALILEO_API_URL = "https://api.galileo.ai/v1";
+import {
+  GalileoLogger,
+  init as galileoInit,
+  flush as galileoFlush,
+  getLogger,
+} from "galileo";
 
 /**
- * Trace span types.
+ * Span types supported by Galileo.
  */
-export type SpanType = "llm" | "tool" | "retrieval" | "agent" | "workflow";
+export type GalileoSpanType = "llm" | "tool" | "retriever" | "agent" | "workflow";
 
 /**
- * Span data structure.
+ * LLM span input parameters.
  */
-export type SpanData = {
-  /** Unique span ID. */
-  spanId: string;
-  /** Parent span ID (for nested spans). */
-  parentSpanId?: string;
-  /** Trace ID (groups related spans). */
-  traceId: string;
-  /** Span type. */
-  type: SpanType;
-  /** Span name/label. */
-  name: string;
-  /** Start timestamp. */
-  startTime: Date;
-  /** End timestamp. */
-  endTime?: Date;
-  /** Duration in milliseconds. */
-  durationMs?: number;
-  /** Status. */
-  status: "running" | "success" | "error";
-  /** Error message (if status is error). */
-  error?: string;
-  /** Input data. */
-  input?: unknown;
-  /** Output data. */
-  output?: unknown;
-  /** Custom metadata. */
-  metadata?: Record<string, unknown>;
-};
-
-/**
- * LLM call specific data.
- */
-export type LLMSpanData = SpanData & {
-  type: "llm";
+export type LLMSpanInput = {
+  /** Input messages or prompt. */
+  input: string | Array<{ role: string; content: string }>;
+  /** Output response from the LLM. */
+  output: string | { role: string; content: string };
+  /** Model name/identifier. */
   model: string;
-  promptTokens?: number;
-  completionTokens?: number;
+  /** Span name/label. */
+  name?: string;
+  /** Duration in nanoseconds. */
+  durationNs?: number;
+  /** Number of input tokens. */
+  numInputTokens?: number;
+  /** Number of output tokens. */
+  numOutputTokens?: number;
+  /** Total tokens used. */
   totalTokens?: number;
+  /** Temperature setting. */
   temperature?: number;
-  systemPrompt?: string;
-  userPrompt?: string;
-  response?: string;
+  /** HTTP status code. */
+  statusCode?: number;
+  /** Custom metadata. */
+  metadata?: Record<string, string>;
+  /** Tags for categorization. */
+  tags?: string[];
 };
 
 /**
- * Tool call specific data.
+ * Tool span input parameters.
  */
-export type ToolSpanData = SpanData & {
-  type: "tool";
-  toolName: string;
-  toolUrl?: string;
-  httpMethod?: string;
-  httpStatus?: number;
-  paid?: boolean;
-  amountAtomic?: string;
+export type ToolSpanInput = {
+  /** Input parameters for the tool. */
+  input: string;
+  /** Output result from the tool. */
+  output?: string;
+  /** Tool name. */
+  name?: string;
+  /** Duration in nanoseconds. */
+  durationNs?: number;
+  /** HTTP status code. */
+  statusCode?: number;
+  /** Tool call ID from LLM. */
+  toolCallId?: string;
+  /** Custom metadata. */
+  metadata?: Record<string, string>;
+  /** Tags for categorization. */
+  tags?: string[];
+};
+
+/**
+ * Workflow span input parameters.
+ */
+export type WorkflowSpanInput = {
+  /** Input content for the workflow. */
+  input: string;
+  /** Output result from the workflow. */
+  output?: string;
+  /** Workflow name. */
+  name?: string;
+  /** Duration in nanoseconds. */
+  durationNs?: number;
+  /** Custom metadata. */
+  metadata?: Record<string, string>;
+  /** Tags for categorization. */
+  tags?: string[];
+};
+
+/**
+ * Agent span input parameters.
+ */
+export type AgentSpanInput = {
+  /** Input content for the agent. */
+  input: string;
+  /** Output result from the agent. */
+  output?: string;
+  /** Agent name. */
+  name?: string;
+  /** Duration in nanoseconds. */
+  durationNs?: number;
+  /** Agent type (planner, router, etc.). */
+  agentType?: "default" | "planner" | "react" | "reflection" | "router" | "classifier" | "supervisor" | "judge";
+  /** Custom metadata. */
+  metadata?: Record<string, string>;
+  /** Tags for categorization. */
+  tags?: string[];
+};
+
+/**
+ * Trace input parameters.
+ */
+export type TraceInput = {
+  /** Input content for the trace. */
+  input: string;
+  /** Output result from the trace. */
+  output?: string;
+  /** Trace name. */
+  name?: string;
+  /** Duration in nanoseconds. */
+  durationNs?: number;
+  /** Custom metadata. */
+  metadata?: Record<string, string>;
+  /** Tags for categorization. */
+  tags?: string[];
 };
 
 /**
  * Check if Galileo is configured.
+ *
+ * @description Checks if the required Galileo environment variables are set.
+ * At minimum, GALILEO_API_KEY is required for Galileo to function.
+ *
+ * @returns True if Galileo is configured, false otherwise.
+ *
+ * @example
+ * ```typescript
+ * if (isGalileoConfigured()) {
+ *   await initializeGalileo();
+ * }
+ * ```
  */
 export function isGalileoConfigured(): boolean {
-  return !!process.env.GALILEO_API_KEY && !!process.env.GALILEO_PROJECT_ID;
+  return !!process.env.GALILEO_API_KEY;
 }
 
 /**
- * Log a span to Galileo.
+ * Initialize the Galileo SDK.
  *
- * @param span - The span data to log.
+ * @description Initializes the Galileo SDK with project and log stream configuration.
+ * Should be called once at application startup. If environment variables are set,
+ * they will be used automatically.
+ *
+ * @param options - Optional initialization options.
+ * @param options.projectName - Override the project name (defaults to GALILEO_PROJECT env var).
+ * @param options.logStreamName - Override the log stream name (defaults to GALILEO_LOG_STREAM env var).
+ *
+ * @example
+ * ```typescript
+ * await initializeGalileo({
+ *   projectName: "paigent-studio",
+ *   logStreamName: "production"
+ * });
+ * ```
  */
-async function logSpan(span: SpanData): Promise<void> {
-  const apiKey = process.env.GALILEO_API_KEY;
-  const projectId = process.env.GALILEO_PROJECT_ID;
-
-  if (!apiKey || !projectId) {
-    // Silently skip if not configured
+export async function initializeGalileo(options?: {
+  projectName?: string;
+  logStreamName?: string;
+}): Promise<void> {
+  if (!isGalileoConfigured()) {
+    console.warn(
+      "Galileo is not configured. Set GALILEO_API_KEY environment variable to enable observability."
+    );
     return;
   }
 
   try {
-    await fetch(`${GALILEO_API_URL}/projects/${projectId}/traces`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        spans: [span],
-      }),
+    await galileoInit({
+      projectName: options?.projectName ?? process.env.GALILEO_PROJECT ?? "paigent-studio",
+      logstream: options?.logStreamName ?? process.env.GALILEO_LOG_STREAM ?? "default", // Note: SDK uses 'logstream' not 'logStreamName'
     });
   } catch (error) {
-    // Log error but don't fail the main operation
-    console.error("Galileo logging error:", error);
+    console.error("Failed to initialize Galileo:", error);
   }
 }
 
 /**
- * Generate a unique ID.
- */
-function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-}
-
-/**
- * Create a trace context.
+ * Get the Galileo logger instance.
  *
- * @description Creates a new trace context for grouping related spans.
+ * @description Returns the singleton Galileo logger instance. Creates one if it doesn't exist.
  *
- * @param name - Name of the trace.
- * @returns Trace context with helper methods.
+ * @returns The GalileoLogger instance, or undefined if Galileo is not configured.
  *
  * @example
  * ```typescript
- * const trace = createTrace("workflow-execution");
- *
- * const llmSpan = trace.startLLMSpan("planner");
- * // ... do LLM call
- * await trace.endLLMSpan(llmSpan, { output: response });
- *
- * await trace.complete();
+ * const logger = getGalileoLogger();
+ * if (logger) {
+ *   logger.startTrace({ input: "User query" });
+ * }
  * ```
  */
-export function createTrace(name: string) {
-  const traceId = generateId();
-  const rootSpan: SpanData = {
-    spanId: generateId(),
-    traceId,
-    type: "workflow",
-    name,
-    startTime: new Date(),
-    status: "running",
-  };
+export function getGalileoLogger(): GalileoLogger | undefined {
+  if (!isGalileoConfigured()) {
+    return undefined;
+  }
 
-  const spans: SpanData[] = [rootSpan];
+  try {
+    return getLogger({
+      projectName: process.env.GALILEO_PROJECT ?? "paigent-studio",
+      logstream: process.env.GALILEO_LOG_STREAM ?? "default", // Note: SDK uses 'logstream' not 'logStreamName'
+    });
+  } catch (error) {
+    console.error("Failed to get Galileo logger:", error);
+    return undefined;
+  }
+}
+
+/**
+ * Flush all pending traces to Galileo.
+ *
+ * @description Uploads all buffered traces to the Galileo platform.
+ * Should be called periodically or before application shutdown.
+ *
+ * @example
+ * ```typescript
+ * // At the end of a request handler
+ * await flushGalileo();
+ * ```
+ */
+export async function flushGalileo(): Promise<void> {
+  if (!isGalileoConfigured()) {
+    return;
+  }
+
+  try {
+    await galileoFlush();
+  } catch (error) {
+    console.error("Failed to flush Galileo traces:", error);
+  }
+}
+
+/**
+ * Create a trace context for logging a complete workflow.
+ *
+ * @description Creates a new trace context that groups related spans together.
+ * Use this to track the full execution of a workflow or request.
+ *
+ * @param input - The trace input parameters.
+ * @returns A trace context object with methods to add spans and complete the trace.
+ *
+ * @example
+ * ```typescript
+ * const trace = createGalileoTrace({
+ *   input: "Summarize the top 3 news articles about AI",
+ *   name: "WorkflowExecution",
+ *   tags: ["production", "summarization"]
+ * });
+ *
+ * // Add spans...
+ * trace.addLLMSpan({ ... });
+ * trace.addToolSpan({ ... });
+ *
+ * // Complete the trace
+ * await trace.complete({ output: "Final result" });
+ * ```
+ */
+export function createGalileoTrace(input: TraceInput) {
+  const logger = getGalileoLogger();
+  const startTime = Date.now();
+
+  if (!logger) {
+    // Return a no-op trace context if Galileo is not configured
+    return {
+      /**
+       * Add an LLM span to this trace (no-op).
+       */
+      addLLMSpan: (_params: LLMSpanInput) => {},
+      /**
+       * Add a tool span to this trace (no-op).
+       */
+      addToolSpan: (_params: ToolSpanInput) => {},
+      /**
+       * Add a workflow span to this trace (no-op).
+       */
+      addWorkflowSpan: (_params: WorkflowSpanInput) => {},
+      /**
+       * Add an agent span to this trace (no-op).
+       */
+      addAgentSpan: (_params: AgentSpanInput) => {},
+      /**
+       * Conclude the current span and move up the hierarchy (no-op).
+       */
+      conclude: (_options?: { output?: string; durationNs?: number; statusCode?: number }) => {},
+      /**
+       * Complete the trace and flush (no-op).
+       */
+      complete: async (_options?: { output?: string; error?: string }) => {},
+    };
+  }
+
+  // Start the trace with the Galileo logger
+  logger.startTrace({
+    input: input.input,
+    name: input.name,
+    metadata: input.metadata,
+    tags: input.tags,
+  });
 
   return {
-    traceId,
-    rootSpanId: rootSpan.spanId,
-
     /**
-     * Start an LLM span.
+     * Add an LLM span to this trace.
+     *
+     * @param params - The LLM span parameters.
      */
-    startLLMSpan(
-      name: string,
-      data: Partial<LLMSpanData>
-    ): LLMSpanData {
-      const span: LLMSpanData = {
-        spanId: generateId(),
-        parentSpanId: rootSpan.spanId,
-        traceId,
-        type: "llm",
-        name,
-        startTime: new Date(),
-        status: "running",
-        model: data.model || "unknown",
-        ...data,
-      };
-      spans.push(span);
-      return span;
-    },
-
-    /**
-     * End an LLM span.
-     */
-    async endLLMSpan(
-      span: LLMSpanData,
-      result: {
-        output?: string;
-        error?: string;
-        totalTokens?: number;
-        promptTokens?: number;
-        completionTokens?: number;
+    addLLMSpan: (params: LLMSpanInput) => {
+      try {
+        logger.addLlmSpan({
+          input: params.input,
+          output: params.output,
+          model: params.model,
+          name: params.name,
+          durationNs: params.durationNs,
+          numInputTokens: params.numInputTokens,
+          numOutputTokens: params.numOutputTokens,
+          totalTokens: params.totalTokens,
+          temperature: params.temperature,
+          statusCode: params.statusCode,
+          metadata: params.metadata,
+          tags: params.tags,
+        });
+      } catch (error) {
+        console.error("Failed to add LLM span:", error);
       }
-    ): Promise<void> {
-      span.endTime = new Date();
-      span.durationMs = span.endTime.getTime() - span.startTime.getTime();
-      span.status = result.error ? "error" : "success";
-      span.error = result.error;
-      span.response = result.output;
-      span.totalTokens = result.totalTokens;
-      span.promptTokens = result.promptTokens;
-      span.completionTokens = result.completionTokens;
-
-      await logSpan(span);
     },
 
     /**
-     * Start a tool span.
+     * Add a tool span to this trace.
+     *
+     * @param params - The tool span parameters.
      */
-    startToolSpan(
-      name: string,
-      data: Partial<ToolSpanData>
-    ): ToolSpanData {
-      const span: ToolSpanData = {
-        spanId: generateId(),
-        parentSpanId: rootSpan.spanId,
-        traceId,
-        type: "tool",
-        name,
-        startTime: new Date(),
-        status: "running",
-        toolName: data.toolName || name,
-        ...data,
-      };
-      spans.push(span);
-      return span;
-    },
-
-    /**
-     * End a tool span.
-     */
-    async endToolSpan(
-      span: ToolSpanData,
-      result: {
-        output?: unknown;
-        error?: string;
-        httpStatus?: number;
-        paid?: boolean;
-        amountAtomic?: string;
+    addToolSpan: (params: ToolSpanInput) => {
+      try {
+        logger.addToolSpan({
+          input: params.input,
+          output: params.output,
+          name: params.name,
+          durationNs: params.durationNs,
+          statusCode: params.statusCode,
+          toolCallId: params.toolCallId,
+          metadata: params.metadata,
+          tags: params.tags,
+        });
+      } catch (error) {
+        console.error("Failed to add tool span:", error);
       }
-    ): Promise<void> {
-      span.endTime = new Date();
-      span.durationMs = span.endTime.getTime() - span.startTime.getTime();
-      span.status = result.error ? "error" : "success";
-      span.error = result.error;
-      span.output = result.output;
-      span.httpStatus = result.httpStatus;
-      span.paid = result.paid;
-      span.amountAtomic = result.amountAtomic;
-
-      await logSpan(span);
     },
 
     /**
-     * Complete the trace.
+     * Add a workflow span to this trace.
+     *
+     * @description Creates a nested workflow span. Subsequent spans will be children
+     * of this workflow until conclude() is called.
+     *
+     * @param params - The workflow span parameters.
      */
-    async complete(error?: string): Promise<void> {
-      rootSpan.endTime = new Date();
-      rootSpan.durationMs =
-        rootSpan.endTime.getTime() - rootSpan.startTime.getTime();
-      rootSpan.status = error ? "error" : "success";
-      rootSpan.error = error;
+    addWorkflowSpan: (params: WorkflowSpanInput) => {
+      try {
+        logger.addWorkflowSpan({
+          input: params.input,
+          output: params.output,
+          name: params.name,
+          durationNs: params.durationNs,
+          metadata: params.metadata,
+          tags: params.tags,
+        });
+      } catch (error) {
+        console.error("Failed to add workflow span:", error);
+      }
+    },
 
-      await logSpan(rootSpan);
+    /**
+     * Add an agent span to this trace.
+     *
+     * @description Creates a nested agent span. Subsequent spans will be children
+     * of this agent until conclude() is called.
+     *
+     * @param params - The agent span parameters.
+     */
+    addAgentSpan: (params: AgentSpanInput) => {
+      try {
+        logger.addAgentSpan({
+          input: params.input,
+          output: params.output,
+          name: params.name,
+          durationNs: params.durationNs,
+          agentType: params.agentType,
+          metadata: params.metadata,
+          tags: params.tags,
+        });
+      } catch (error) {
+        console.error("Failed to add agent span:", error);
+      }
+    },
+
+    /**
+     * Conclude the current span and move up the hierarchy.
+     *
+     * @description Used to close a workflow or agent span and return to the parent.
+     *
+     * @param options - Conclude options.
+     */
+    conclude: (options?: { output?: string; durationNs?: number; statusCode?: number }) => {
+      try {
+        logger.conclude({
+          output: options?.output,
+          durationNs: options?.durationNs,
+          statusCode: options?.statusCode,
+        });
+      } catch (error) {
+        console.error("Failed to conclude span:", error);
+      }
+    },
+
+    /**
+     * Complete the trace and flush to Galileo.
+     *
+     * @description Closes the trace with final output and uploads to Galileo.
+     *
+     * @param options - Completion options.
+     */
+    complete: async (options?: { output?: string; error?: string }) => {
+      try {
+        const durationNs = (Date.now() - startTime) * 1_000_000;
+
+        // Conclude the trace
+        logger.conclude({
+          output: options?.output ?? options?.error,
+          durationNs,
+          statusCode: options?.error ? 500 : 200,
+          concludeAll: true,
+        });
+
+        // Flush to Galileo
+        await logger.flush();
+      } catch (error) {
+        console.error("Failed to complete trace:", error);
+      }
     },
   };
 }
 
 /**
- * Log an LLM call (standalone, without trace context).
+ * Log a single LLM call without a trace context.
  *
- * @param data - LLM call data.
+ * @description Convenience method for logging standalone LLM calls.
+ * Creates a single-span trace automatically.
+ *
+ * @param params - The LLM call parameters.
+ *
+ * @example
+ * ```typescript
+ * await logLLMCall({
+ *   input: [{ role: "user", content: "Hello!" }],
+ *   output: { role: "assistant", content: "Hi there!" },
+ *   model: "gpt-4o",
+ *   numInputTokens: 5,
+ *   numOutputTokens: 3,
+ * });
+ * ```
  */
-export async function logLLMCall(
-  data: Omit<LLMSpanData, "spanId" | "traceId" | "type" | "status">
-): Promise<void> {
-  const span: LLMSpanData = {
-    spanId: generateId(),
-    traceId: generateId(),
-    type: "llm",
-    status: "success",
-    ...data,
-  };
+export async function logLLMCall(params: LLMSpanInput): Promise<void> {
+  const logger = getGalileoLogger();
 
-  await logSpan(span);
+  if (!logger) {
+    return;
+  }
+
+  try {
+    logger.addSingleLlmSpanTrace({
+      input: params.input,
+      output: params.output,
+      model: params.model,
+      name: params.name ?? "LLM Call",
+      durationNs: params.durationNs,
+      numInputTokens: params.numInputTokens,
+      numOutputTokens: params.numOutputTokens,
+      totalTokens: params.totalTokens,
+      temperature: params.temperature,
+      statusCode: params.statusCode,
+      metadata: params.metadata,
+      tags: params.tags,
+    });
+
+    await logger.flush();
+  } catch (error) {
+    console.error("Failed to log LLM call:", error);
+  }
 }
 
 /**
- * Log a tool call (standalone, without trace context).
+ * Log a tool call with full context.
  *
- * @param data - Tool call data.
+ * @description Creates a single-span trace for a tool call.
+ *
+ * @param params - The tool call parameters.
+ *
+ * @example
+ * ```typescript
+ * await logToolCall({
+ *   input: JSON.stringify({ url: "https://api.example.com/data" }),
+ *   output: JSON.stringify({ result: "success" }),
+ *   name: "API Fetch",
+ *   statusCode: 200,
+ *   metadata: { toolId: "tool-123" }
+ * });
+ * ```
  */
-export async function logToolCall(
-  data: Omit<ToolSpanData, "spanId" | "traceId" | "type" | "status">
-): Promise<void> {
-  const span: ToolSpanData = {
-    spanId: generateId(),
-    traceId: generateId(),
-    type: "tool",
-    status: "success",
-    ...data,
-  };
+export async function logToolCall(params: ToolSpanInput): Promise<void> {
+  const logger = getGalileoLogger();
 
-  await logSpan(span);
+  if (!logger) {
+    return;
+  }
+
+  try {
+    // Create a simple trace with a tool span
+    logger.startTrace({
+      input: params.input,
+      name: params.name ?? "Tool Call",
+      metadata: params.metadata,
+      tags: params.tags,
+    });
+
+    logger.addToolSpan({
+      input: params.input,
+      output: params.output,
+      name: params.name,
+      durationNs: params.durationNs,
+      statusCode: params.statusCode,
+      toolCallId: params.toolCallId,
+      metadata: params.metadata,
+      tags: params.tags,
+    });
+
+    logger.conclude({
+      output: params.output,
+      durationNs: params.durationNs,
+      statusCode: params.statusCode,
+      concludeAll: true,
+    });
+
+    await logger.flush();
+  } catch (error) {
+    console.error("Failed to log tool call:", error);
+  }
+}
+
+/**
+ * Convert milliseconds to nanoseconds.
+ *
+ * @description Utility function for converting duration from ms to ns.
+ *
+ * @param ms - Duration in milliseconds.
+ * @returns Duration in nanoseconds.
+ */
+export function msToNs(ms: number): number {
+  return ms * 1_000_000;
 }

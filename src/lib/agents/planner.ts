@@ -3,6 +3,7 @@
  *
  * @description Converts user intent into a structured workflow graph.
  * Uses GLM-4.7 Thinking model via Fireworks AI.
+ * Includes Galileo observability for tracing planning operations.
  *
  * @see paigent-studio-spec.md Section 12.1
  */
@@ -12,6 +13,7 @@ import { extractJsonWithRepair } from "@/lib/utils/json-parser";
 import { RunGraph, validateGraph } from "@/types/graph";
 import { PLANNER_SYSTEM_PROMPT, createPlannerUserPrompt, createRetryPrompt } from "@/lib/fireworks/prompts/planner";
 import type { ToolDocument, WorkspaceSettings } from "@/lib/db/collections";
+import { createGalileoTrace, msToNs } from "@/lib/galileo/client";
 
 /**
  * Planner input parameters.
@@ -57,7 +59,7 @@ const MAX_ATTEMPTS = 3;
  *
  * @description Calls the LLM to generate a workflow graph, with automatic
  * retry on validation failures. The LLM is re-prompted with validation
- * errors to help it correct the output.
+ * errors to help it correct the output. All operations are traced via Galileo.
  *
  * @param input - The planner input.
  * @returns The planner result with graph or error.
@@ -83,6 +85,29 @@ export async function planWorkflow(input: PlannerInput): Promise<PlannerResult> 
     workspaceSettings,
     maxBudgetAtomic = workspaceSettings.autoPayMaxPerRunAtomic,
   } = input;
+
+  // Start Galileo trace for the planning operation
+  const trace = createGalileoTrace({
+    input: intent,
+    name: "Workflow Planning",
+    tags: ["planner", "agent"],
+    metadata: {
+      toolCount: String(availableTools.length),
+      autoPayEnabled: String(workspaceSettings.autoPayEnabled),
+    },
+  });
+
+  // Add agent span for the planner
+  trace.addAgentSpan({
+    input: intent,
+    name: "Planner Agent",
+    agentType: "planner",
+    metadata: {
+      maxBudgetAtomic: maxBudgetAtomic ?? "unlimited",
+    },
+  });
+
+  const planningStartTime = Date.now();
 
   // Prepare tool information for the prompt
   const toolsForPrompt = availableTools.map((tool) => ({
@@ -115,13 +140,40 @@ export async function planWorkflow(input: PlannerInput): Promise<PlannerResult> 
     attempts++;
 
     try {
-      // Call LLM
-      const response = await callLLM({
-        systemPrompt: PLANNER_SYSTEM_PROMPT,
-        userPrompt,
-        model: FIREWORKS_MODELS.GLM_4_9B,
-        maxTokens: 4096,
+      // Call LLM - skip Galileo logging in callLLM since we're tracing at higher level
+      const response = await callLLM(
+        {
+          systemPrompt: PLANNER_SYSTEM_PROMPT,
+          userPrompt,
+          model: FIREWORKS_MODELS.GLM_4_9B,
+          maxTokens: 4096,
+          temperature: 0.7,
+        },
+        {
+          skipGalileoLogging: true, // We handle logging at the agent level
+        }
+      );
+
+      // Log the LLM call within the planner agent span
+      trace.addLLMSpan({
+        input: [
+          { role: "system", content: PLANNER_SYSTEM_PROMPT },
+          { role: "user", content: userPrompt },
+        ],
+        output: { role: "assistant", content: response.text },
+        model: response.model,
+        name: `Planner LLM Call (attempt ${attempts})`,
+        durationNs: msToNs(response.latencyMs),
+        numInputTokens: response.usage.promptTokens,
+        numOutputTokens: response.usage.completionTokens,
+        totalTokens: response.usage.totalTokens,
         temperature: 0.7,
+        statusCode: 200,
+        tags: ["planner", "llm"],
+        metadata: {
+          attempt: String(attempts),
+          finishReason: response.finishReason ?? "unknown",
+        },
       });
 
       lastRawResponse = response.text;
@@ -146,7 +198,28 @@ export async function planWorkflow(input: PlannerInput): Promise<PlannerResult> 
         continue;
       }
 
-      // Success!
+      // Success! Conclude the agent span and complete the trace
+      const planningDurationNs = msToNs(Date.now() - planningStartTime);
+      trace.conclude({
+        output: JSON.stringify({
+          success: true,
+          nodeCount: validation.data?.nodes.length ?? 0,
+          attempts,
+        }),
+        durationNs: planningDurationNs,
+        statusCode: 200,
+      });
+
+      await trace.complete({
+        output: JSON.stringify({
+          success: true,
+          graph: validation.data,
+          attempts,
+          totalLatencyMs,
+          totalTokens,
+        }),
+      });
+
       return {
         success: true,
         graph: validation.data,
@@ -166,7 +239,18 @@ export async function planWorkflow(input: PlannerInput): Promise<PlannerResult> 
     }
   }
 
-  // All attempts failed
+  // All attempts failed - conclude with error
+  const planningDurationNs = msToNs(Date.now() - planningStartTime);
+  trace.conclude({
+    output: lastError,
+    durationNs: planningDurationNs,
+    statusCode: 500,
+  });
+
+  await trace.complete({
+    error: `Failed to generate valid workflow after ${MAX_ATTEMPTS} attempts. Last error: ${lastError}`,
+  });
+
   return {
     success: false,
     error: `Failed to generate valid workflow after ${MAX_ATTEMPTS} attempts. Last error: ${lastError}`,

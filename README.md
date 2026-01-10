@@ -172,8 +172,10 @@ VOYAGE_API_KEY=
 
 # Galileo (Optional - for observability)
 # Get from: https://app.galileo.ai/
+# See: https://v2docs.galileo.ai/sdk-api/typescript/sdk-reference
 GALILEO_API_KEY=
-GALILEO_PROJECT_ID=
+GALILEO_PROJECT=paigent-studio
+GALILEO_LOG_STREAM=production
 
 # Cron Secret (generate a random string)
 CRON_SECRET=your_random_secret_here
@@ -288,6 +290,12 @@ POST /api/wallet/fund
 
 ```typescript
 // Process queued steps (Vercel Cron)
+// Vercel Cron Jobs trigger this endpoint using GET requests.
+// The CRON_SECRET is automatically sent via Authorization header.
+GET /api/cron/tick
+Authorization: Bearer {CRON_SECRET}
+
+// Alternative POST endpoint for manual triggering/testing
 POST /api/cron/tick
 Authorization: Bearer {CRON_SECRET}
 ```

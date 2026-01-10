@@ -3,6 +3,7 @@
  *
  * @description Executes individual workflow steps based on their node type.
  * Handles tool calls, LLM reasoning, approvals, and other node types.
+ * Includes Galileo observability for tracing step executions.
  *
  * @see paigent-studio-spec.md Section 14
  */
@@ -25,6 +26,7 @@ import { getRun, updateRunStatus, updateRunHeartbeat } from "@/lib/db/queries/ru
 import { appendRunEvent } from "@/lib/db/queries/events";
 import { callLLM, FIREWORKS_MODELS } from "@/lib/fireworks/client";
 import { extractJsonWithRepair } from "@/lib/utils/json-parser";
+import { createGalileoTrace } from "@/lib/galileo/client";
 
 /**
  * Step execution result.
@@ -116,6 +118,7 @@ async function executeToolCall(
  * Execute an llm_reason step.
  *
  * @description Calls the LLM for analysis, summarization, or decision-making.
+ * Includes Galileo logging for the LLM call.
  */
  
 async function executeLLMReason(
@@ -146,14 +149,27 @@ async function executeLLMReason(
       .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
       .join("\n");
 
-    // Call LLM
-    const response = await callLLM({
-      systemPrompt,
-      userPrompt: userPromptTemplate + "\n\n" + userPrompt,
-      model: FIREWORKS_MODELS.GLM_4_9B,
-      maxTokens: 2048,
-      temperature: 0.7,
-    });
+    const fullUserPrompt = userPromptTemplate + "\n\n" + userPrompt;
+
+    // Call LLM with Galileo logging enabled for this reasoning step
+    const response = await callLLM(
+      {
+        systemPrompt,
+        userPrompt: fullUserPrompt,
+        model: FIREWORKS_MODELS.GLM_4_9B,
+        maxTokens: 2048,
+        temperature: 0.7,
+      },
+      {
+        spanName: `LLM Reason: ${step.stepId}`,
+        tags: ["llm_reason", "executor", "reasoning"],
+        metadata: {
+          stepId: step.stepId,
+          runId: step.runId.toString(),
+          nodeLabel: (node as { label?: string }).label ?? step.stepId,
+        },
+      }
+    );
 
     // Parse output if JSON format expected
     const outputFormat = (node as { outputFormat?: string }).outputFormat || "text";
@@ -312,12 +328,33 @@ async function executeFinalize(
  *
  * @description Main entry point for step execution.
  * Routes to the appropriate handler based on node type.
+ * All step executions are traced via Galileo for observability.
  */
 export async function executeStep(
   db: Db,
   step: RunStepDocument,
   workerId: string
 ): Promise<StepExecutionResult> {
+  // Start Galileo trace for step execution
+  const trace = createGalileoTrace({
+    input: JSON.stringify({
+      stepId: step.stepId,
+      nodeType: step.nodeType,
+      attempt: step.attempt,
+    }),
+    name: `Step Execution: ${step.stepId}`,
+    tags: ["executor", "step", step.nodeType],
+    metadata: {
+      runId: step.runId.toString(),
+      workspaceId: step.workspaceId.toString(),
+      workerId,
+      nodeType: step.nodeType,
+      attempt: String(step.attempt),
+    },
+  });
+
+  const stepStartTime = Date.now();
+
   try {
     // Get the run
     const run = await getRun(step.runId);
@@ -342,22 +379,57 @@ export async function executeStep(
 
     switch (step.nodeType) {
       case "tool_call":
+        trace.addToolSpan({
+          input: JSON.stringify(step.inputs ?? {}),
+          name: `Tool Call: ${step.stepId}`,
+          metadata: { stepId: step.stepId },
+          tags: ["tool", "executor"],
+        });
         result = await executeToolCall(db, step, run, workerId);
         break;
       case "llm_reason":
         result = await executeLLMReason(db, step, run, workerId);
+        // LLM span is logged within executeLLMReason
         break;
       case "approval":
+        trace.addWorkflowSpan({
+          input: JSON.stringify(step.inputs ?? {}),
+          name: `Approval Gate: ${step.stepId}`,
+          metadata: { stepId: step.stepId },
+          tags: ["approval", "executor"],
+        });
         result = await executeApproval(db, step, run, workerId);
+        trace.conclude({ output: "Awaiting approval", statusCode: 202 });
         break;
       case "wait":
+        trace.addWorkflowSpan({
+          input: JSON.stringify(step.inputs ?? {}),
+          name: `Wait/Poll: ${step.stepId}`,
+          metadata: { stepId: step.stepId },
+          tags: ["wait", "executor"],
+        });
         result = await executeWait(db, step, run, workerId);
+        trace.conclude({ output: "Wait completed", statusCode: 200 });
         break;
       case "merge":
+        trace.addWorkflowSpan({
+          input: JSON.stringify(step.inputs ?? {}),
+          name: `Merge: ${step.stepId}`,
+          metadata: { stepId: step.stepId },
+          tags: ["merge", "executor"],
+        });
         result = await executeMerge(db, step, run, workerId);
+        trace.conclude({ output: JSON.stringify(result.result ?? {}), statusCode: 200 });
         break;
       case "finalize":
+        trace.addWorkflowSpan({
+          input: JSON.stringify(step.inputs ?? {}),
+          name: `Finalize: ${step.stepId}`,
+          metadata: { stepId: step.stepId },
+          tags: ["finalize", "executor"],
+        });
         result = await executeFinalize(db, step, run, workerId);
+        trace.conclude({ output: JSON.stringify(result.result ?? {}), statusCode: 200 });
         break;
       default:
         throw new Error(`Unknown node type: ${step.nodeType}`);
@@ -395,6 +467,16 @@ export async function executeStep(
           actor: { type: "system", id: workerId },
         });
       }
+
+      // Complete trace with success
+      const stepDurationMs = Date.now() - stepStartTime;
+      await trace.complete({
+        output: JSON.stringify({
+          status: "succeeded",
+          result: result.result,
+          latencyMs: stepDurationMs,
+        }),
+      });
     } else if (result.status === "blocked") {
       await markStepBlocked(step._id, result.error?.message || "Blocked");
 
@@ -410,12 +492,27 @@ export async function executeStep(
       if (step.nodeType === "approval") {
         await updateRunStatus(step.runId, "paused_for_approval");
       }
+
+      // Complete trace with blocked status
+      await trace.complete({
+        output: JSON.stringify({
+          status: "blocked",
+          reason: result.error?.message,
+        }),
+      });
     } else if (result.status === "failed" || result.status === "retrying") {
-      // This is handled in handleStepFailure below
+      // Complete trace with failure
+      await trace.complete({
+        error: result.error?.message ?? "Step failed",
+      });
     }
 
     return result;
   } catch (error) {
+    // Complete trace with error
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    await trace.complete({ error: errorMessage });
+
     return handleStepFailure(db, step, error, workerId);
   }
 }

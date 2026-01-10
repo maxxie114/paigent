@@ -3,6 +3,7 @@
  *
  * @description OpenAI-compatible client for Fireworks AI API.
  * Used for GLM-4.7 Thinking model and other LLM operations.
+ * Includes Galileo observability integration for tracing LLM calls.
  *
  * @see https://fireworks.ai/docs/tools-sdks/openai-compatibility
  * @see https://fireworks.ai/docs/guides/querying-text-models
@@ -10,6 +11,11 @@
 
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import {
+  getGalileoLogger,
+  isGalileoConfigured,
+  msToNs,
+} from "@/lib/galileo/client";
 
 /**
  * Fireworks AI configuration.
@@ -113,8 +119,14 @@ export type LLMCallResponse = {
  *
  * @description Makes a chat completion request to Fireworks AI.
  * Uses GLM-4 by default for best reasoning performance.
+ * Automatically logs the call to Galileo if configured.
  *
  * @param params - The call parameters.
+ * @param options - Optional configuration for logging.
+ * @param options.skipGalileoLogging - If true, skip Galileo logging for this call.
+ * @param options.spanName - Custom name for the Galileo span.
+ * @param options.tags - Tags to attach to the Galileo span.
+ * @param options.metadata - Additional metadata for the Galileo span.
  * @returns The LLM response with text and metadata.
  *
  * @example
@@ -126,7 +138,15 @@ export type LLMCallResponse = {
  * console.log(response.text); // "4"
  * ```
  */
-export async function callLLM(params: LLMCallParams): Promise<LLMCallResponse> {
+export async function callLLM(
+  params: LLMCallParams,
+  options?: {
+    skipGalileoLogging?: boolean;
+    spanName?: string;
+    tags?: string[];
+    metadata?: Record<string, string>;
+  }
+): Promise<LLMCallResponse> {
   const {
     systemPrompt,
     userPrompt,
@@ -154,9 +174,50 @@ export async function callLLM(params: LLMCallParams): Promise<LLMCallResponse> {
 
   const latencyMs = Date.now() - startTime;
   const choice = response.choices[0];
+  const responseText = choice?.message?.content ?? "";
+
+  // Log to Galileo if configured and not explicitly skipped
+  if (isGalileoConfigured() && !options?.skipGalileoLogging) {
+    const logger = getGalileoLogger();
+    if (logger) {
+      try {
+        // Format input as message array for Galileo
+        const inputMessages = [
+          { role: "system" as const, content: systemPrompt },
+          ...additionalMessages.map((msg) => ({
+            role: msg.role as "user" | "assistant" | "system",
+            content: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content),
+          })),
+          { role: "user" as const, content: userPrompt },
+        ];
+
+        logger.addSingleLlmSpanTrace({
+          input: inputMessages,
+          output: { role: "assistant", content: responseText },
+          model: response.model,
+          name: options?.spanName ?? "Fireworks LLM Call",
+          durationNs: msToNs(latencyMs),
+          numInputTokens: response.usage?.prompt_tokens,
+          numOutputTokens: response.usage?.completion_tokens,
+          totalTokens: response.usage?.total_tokens,
+          temperature,
+          statusCode: 200,
+          metadata: options?.metadata,
+          tags: options?.tags ?? ["fireworks", "llm"],
+        });
+
+        // Flush asynchronously - don't block the response
+        logger.flush().catch((err) => {
+          console.error("Failed to flush Galileo logs:", err);
+        });
+      } catch (error) {
+        console.error("Failed to log LLM call to Galileo:", error);
+      }
+    }
+  }
 
   return {
-    text: choice?.message?.content ?? "",
+    text: responseText,
     usage: {
       promptTokens: response.usage?.prompt_tokens ?? 0,
       completionTokens: response.usage?.completion_tokens ?? 0,
