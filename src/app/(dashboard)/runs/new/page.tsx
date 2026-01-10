@@ -4,9 +4,10 @@
  * New Run Page
  *
  * @description Create a new workflow run with voice or text input.
+ * Automatically fetches the user's default workspace on mount.
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Sparkles, Loader2 } from "lucide-react";
 import Link from "next/link";
@@ -21,20 +22,84 @@ import { toast } from "sonner";
 import type { RunGraph } from "@/types/graph";
 
 /**
+ * Workspace data returned from the API.
+ */
+type WorkspaceData = {
+  id: string;
+  name: string;
+  settings: {
+    autoPayEnabled: boolean;
+    autoPayMaxPerStepAtomic: string;
+    autoPayMaxPerRunAtomic: string;
+    toolAllowlist: string[];
+  };
+  createdAt: string;
+};
+
+/**
  * New Run Page.
  */
 export default function NewRunPage() {
   const router = useRouter();
   const [isCreating, setIsCreating] = useState(false);
+  const [isLoadingWorkspace, setIsLoadingWorkspace] = useState(true);
+  const [workspaceId, setWorkspaceId] = useState<string | undefined>(undefined);
+  const [workspaceError, setWorkspaceError] = useState<string | undefined>(undefined);
   const [generatedGraph, setGeneratedGraph] = useState<RunGraph | null>(null);
   const [autoPayEnabled, setAutoPayEnabled] = useState(true);
   const [budget, setBudget] = useState([5]); // $5 USDC default
+
+  /**
+   * Fetch the user's default workspace on mount.
+   */
+  useEffect(() => {
+    async function fetchWorkspace() {
+      try {
+        setIsLoadingWorkspace(true);
+        setWorkspaceError(undefined);
+
+        const res = await fetch("/api/workspaces");
+        const data = await res.json();
+
+        if (!data.success) {
+          throw new Error(data.error || "Failed to fetch workspace");
+        }
+
+        const workspaces: WorkspaceData[] = data.data.workspaces;
+        if (workspaces.length === 0) {
+          throw new Error("No workspace found. Please refresh the page.");
+        }
+
+        // Use the first workspace (default workspace)
+        setWorkspaceId(workspaces[0].id);
+
+        // Optionally sync auto-pay setting from workspace settings
+        setAutoPayEnabled(workspaces[0].settings.autoPayEnabled);
+      } catch (error) {
+        console.error("Error fetching workspace:", error);
+        setWorkspaceError(
+          error instanceof Error ? error.message : "Failed to fetch workspace"
+        );
+        toast.error("Failed to load workspace. Please refresh the page.");
+      } finally {
+        setIsLoadingWorkspace(false);
+      }
+    }
+
+    fetchWorkspace();
+  }, []);
 
   /**
    * Handle intent submission.
    */
   const handleSubmit = useCallback(
     async (intent: string, voiceTranscript?: string) => {
+      // Ensure workspace is loaded before proceeding
+      if (!workspaceId) {
+        toast.error("Workspace not loaded. Please refresh the page.");
+        return;
+      }
+
       setIsCreating(true);
       setGeneratedGraph(null);
 
@@ -44,11 +109,10 @@ export default function NewRunPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            workspaceId: "default", // Would come from context in production
+            workspaceId,
             intent,
             voiceTranscript,
             budgetMaxAtomic: (budget[0] * 1_000_000).toString(),
-            autoPayEnabled,
           }),
         });
 
@@ -77,8 +141,29 @@ export default function NewRunPage() {
         setIsCreating(false);
       }
     },
-    [router, budget, autoPayEnabled]
+    [router, budget, workspaceId]
   );
+
+  // Show loading state while workspace is being fetched
+  if (isLoadingWorkspace) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[50vh]">
+        <Loader2 className="w-12 h-12 animate-spin text-cyan-accent mb-4" />
+        <p className="text-muted-foreground">Loading workspace...</p>
+      </div>
+    );
+  }
+
+  // Show error state if workspace failed to load
+  if (workspaceError) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-4">
+        <div className="text-destructive text-lg">Failed to load workspace</div>
+        <p className="text-muted-foreground">{workspaceError}</p>
+        <Button onClick={() => window.location.reload()}>Retry</Button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -116,6 +201,7 @@ export default function NewRunPage() {
               <IntentInput
                 onSubmit={handleSubmit}
                 isLoading={isCreating}
+                disabled={!workspaceId}
                 placeholder="Example: Summarize the top 5 news articles about AI from today, then generate a tweet thread about the key insights..."
               />
             </CardContent>
