@@ -3,9 +3,11 @@
  *
  * @description Executes individual workflow steps based on their node type.
  * Handles tool calls, LLM reasoning, approvals, and other node types.
+ * Uses GLM-4.7 via Fireworks Responses API for LLM reasoning steps.
  * Includes Galileo observability for tracing step executions.
  *
  * @see paigent-studio-spec.md Section 14
+ * @see https://docs.fireworks.ai/api-reference/post-responses
  */
 
 import { Db } from "mongodb";
@@ -24,7 +26,10 @@ import {
 } from "@/lib/db/queries/steps";
 import { getRun, updateRunStatus, updateRunHeartbeat } from "@/lib/db/queries/runs";
 import { appendRunEvent } from "@/lib/db/queries/events";
-import { callLLM, FIREWORKS_MODELS } from "@/lib/fireworks/client";
+import {
+  callWithSystemPrompt,
+  RESPONSES_API_MODELS,
+} from "@/lib/fireworks/responses";
 import { extractJsonWithRepair } from "@/lib/utils/json-parser";
 import { createGalileoTrace } from "@/lib/galileo/client";
 
@@ -151,18 +156,23 @@ async function executeLLMReason(
 
     const fullUserPrompt = userPromptTemplate + "\n\n" + userPrompt;
 
-    // Call LLM with Galileo logging enabled for this reasoning step
-    const response = await callLLM(
+    // Call GLM-4.7 via Responses API for reasoning step
+    // Galileo logging is enabled for observability
+    const response = await callWithSystemPrompt(
       {
         systemPrompt,
         userPrompt: fullUserPrompt,
-        model: FIREWORKS_MODELS.GLM_4_9B,
-        maxTokens: 2048,
+        model: RESPONSES_API_MODELS.GLM_4P7,
+        maxOutputTokens: 2048,
         temperature: 0.7,
+        // Enable reasoning for LLM reasoning steps
+        reasoning: { effort: "medium" },
+        // Store responses for debugging/audit trail
+        store: true,
       },
       {
         spanName: `LLM Reason: ${step.stepId}`,
-        tags: ["llm_reason", "executor", "reasoning"],
+        tags: ["llm_reason", "executor", "reasoning", "glm-4p7"],
         metadata: {
           stepId: step.stepId,
           runId: step.runId.toString(),

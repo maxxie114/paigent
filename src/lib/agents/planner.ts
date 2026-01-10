@@ -2,13 +2,20 @@
  * Planner Agent
  *
  * @description Converts user intent into a structured workflow graph.
- * Uses GLM-4.7 Thinking model via Fireworks AI.
+ * Uses GLM-4.7 Thinking model via Fireworks AI Responses API for
+ * advanced reasoning capabilities and conversation continuation.
  * Includes Galileo observability for tracing planning operations.
  *
  * @see paigent-studio-spec.md Section 12.1
+ * @see https://docs.fireworks.ai/api-reference/post-responses
+ * @see https://fireworks.ai/models/fireworks/glm-4p7
  */
 
-import { callLLM, FIREWORKS_MODELS } from "@/lib/fireworks/client";
+import {
+  callWithSystemPrompt,
+  RESPONSES_API_MODELS,
+  type ProcessedResponse,
+} from "@/lib/fireworks/responses";
 import { extractJsonWithRepair } from "@/lib/utils/json-parser";
 import { RunGraph, validateGraph } from "@/types/graph";
 import { PLANNER_SYSTEM_PROMPT, createPlannerUserPrompt, createRetryPrompt } from "@/lib/fireworks/prompts/planner";
@@ -140,14 +147,19 @@ export async function planWorkflow(input: PlannerInput): Promise<PlannerResult> 
     attempts++;
 
     try {
-      // Call LLM - skip Galileo logging in callLLM since we're tracing at higher level
-      const response = await callLLM(
+      // Call GLM-4.7 via Responses API for advanced reasoning
+      // Skip Galileo logging in the call since we're tracing at higher level
+      const response: ProcessedResponse = await callWithSystemPrompt(
         {
           systemPrompt: PLANNER_SYSTEM_PROMPT,
           userPrompt,
-          model: FIREWORKS_MODELS.GLM_4_9B,
-          maxTokens: 4096,
+          model: RESPONSES_API_MODELS.GLM_4P7,
+          maxOutputTokens: 4096,
           temperature: 0.7,
+          // Enable reasoning for complex planning tasks
+          reasoning: { effort: "medium" },
+          // Store responses for potential debugging/continuation
+          store: true,
         },
         {
           skipGalileoLogging: true, // We handle logging at the agent level
@@ -161,18 +173,19 @@ export async function planWorkflow(input: PlannerInput): Promise<PlannerResult> 
           { role: "user", content: userPrompt },
         ],
         output: { role: "assistant", content: response.text },
-        model: response.model,
+        model: response.raw.model,
         name: `Planner LLM Call (attempt ${attempts})`,
         durationNs: msToNs(response.latencyMs),
         numInputTokens: response.usage.promptTokens,
         numOutputTokens: response.usage.completionTokens,
         totalTokens: response.usage.totalTokens,
         temperature: 0.7,
-        statusCode: 200,
-        tags: ["planner", "llm"],
+        statusCode: response.success ? 200 : 500,
+        tags: ["planner", "llm", "responses-api", "glm-4p7"],
         metadata: {
           attempt: String(attempts),
-          finishReason: response.finishReason ?? "unknown",
+          responseId: response.id ?? "not_stored",
+          reasoningTokens: String(response.usage.reasoningTokens),
         },
       });
 
