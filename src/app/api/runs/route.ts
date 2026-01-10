@@ -75,6 +75,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       .toArray();
 
     // Generate workflow graph using Planner agent
+    console.log(`[Planner] Starting workflow planning for intent: "${intent.slice(0, 100)}..."`);
+    
     const planResult = await planWorkflow({
       intent,
       availableTools,
@@ -82,12 +84,23 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       maxBudgetAtomic: budgetMaxAtomic,
     });
 
-    // Use fallback graph if planning failed
-    const graph = planResult.success && planResult.graph
-      ? planResult.graph
-      : createFallbackGraph(intent, planResult.error || "Planning failed");
+    // Log planning result for debugging
+    console.log(`[Planner] Result:`, {
+      success: planResult.success,
+      attempts: planResult.attempts,
+      totalLatencyMs: planResult.totalLatencyMs,
+      error: planResult.error,
+      nodeCount: planResult.graph?.nodes.length ?? 0,
+    });
 
-    // Create run document
+    // Determine if planning failed and what graph/status to use
+    const planningFailed = !planResult.success || !planResult.graph;
+    // Non-null assertion is safe here: planningFailed being false guarantees planResult.graph exists
+    const graph = planningFailed
+      ? createFallbackGraph(intent, planResult.error || "Planning failed - unable to generate workflow")
+      : planResult.graph!;
+
+    // Create run document - mark as failed immediately if planning failed
     const run = await createRun({
       workspaceId: workspaceObjectId,
       createdByClerkUserId: userId,
@@ -103,36 +116,57 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         spentAtomic: "0",
       },
       autoPayPolicy: workspace.settings,
+      // Mark as failed if planning failed to prevent queuing a useless workflow
+      initialStatus: planningFailed ? "failed" : undefined,
     });
 
-    // Create step documents from graph
-    await createStepsFromGraph(run._id, workspaceObjectId, graph);
+    // Create step documents from graph - mark as failed if planning failed
+    await createStepsFromGraph(run._id, workspaceObjectId, graph, {
+      markAsFailed: planningFailed,
+      failureReason: planResult.error || "Planning failed - unable to generate workflow",
+    });
 
     // Append run created event
     await appendRunEvent({
       workspaceId: workspaceObjectId,
       runId: run._id,
-      type: "RUN_CREATED",
+      type: planningFailed ? "RUN_PLANNING_FAILED" : "RUN_CREATED",
       data: {
         intent,
         nodeCount: graph.nodes.length,
         edgeCount: graph.edges.length,
         planningAttempts: planResult.attempts,
         planningLatencyMs: planResult.totalLatencyMs,
+        planningError: planResult.error,
       },
       actor: { type: "user", id: userId },
     });
+
+    // If planning failed, also append a failure event
+    if (planningFailed) {
+      await appendRunEvent({
+        workspaceId: workspaceObjectId,
+        runId: run._id,
+        type: "RUN_FAILED",
+        data: {
+          reason: planResult.error || "Planning failed - unable to generate workflow",
+          stage: "planning",
+        },
+        actor: { type: "system", id: "planner" },
+      });
+    }
 
     return NextResponse.json({
       success: true,
       data: {
         runId: run._id.toString(),
-        status: run.status,
+        status: planningFailed ? "failed" : run.status,
         graph,
         planning: {
           success: planResult.success,
           attempts: planResult.attempts,
           latencyMs: planResult.totalLatencyMs,
+          error: planResult.error,
         },
       },
     });
@@ -216,6 +250,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             maxAtomic: run.budget.maxAtomic,
           },
           createdAt: run.createdAt.toISOString(),
+          updatedAt: run.updatedAt.toISOString(),
         })),
         total,
         page,

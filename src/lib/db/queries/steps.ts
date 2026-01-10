@@ -18,20 +18,38 @@ import {
  */
 
 /**
+ * Options for creating steps from a graph.
+ */
+export type CreateStepsOptions = {
+  /**
+   * If true, mark all steps as "failed" instead of their normal initial status.
+   * Used when planning fails and we want to show the failure in the UI.
+   */
+  markAsFailed?: boolean;
+  /**
+   * The reason for failure (used when markAsFailed is true).
+   */
+  failureReason?: string;
+};
+
+/**
  * Create steps from a run graph.
  *
  * @description Creates step documents for each node in the run graph.
- * Initial status is "queued" for the entry node, "blocked" for others.
+ * Initial status is "queued" for the entry node, "blocked" for others,
+ * unless options.markAsFailed is true, in which case all steps are marked "failed".
  *
  * @param runId - The run ID.
  * @param workspaceId - The workspace ID.
  * @param graph - The run graph.
+ * @param options - Optional configuration for step creation.
  * @returns Array of created step documents.
  */
 export async function createStepsFromGraph(
   runId: ObjectId,
   workspaceId: ObjectId,
-  graph: RunGraph
+  graph: RunGraph,
+  options?: CreateStepsOptions
 ): Promise<RunStepDocument[]> {
   const steps = await collections.runSteps();
   const now = new Date();
@@ -41,6 +59,25 @@ export async function createStepsFromGraph(
   const nodesWithIncomingEdges = new Set(graph.edges.map((e) => e.to));
 
   const stepDocs: RunStepDocument[] = graph.nodes.map((node) => {
+    // If markAsFailed is true, all steps are marked as failed
+    if (options?.markAsFailed) {
+      return {
+        _id: new ObjectId(),
+        workspaceId,
+        runId,
+        stepId: node.id,
+        nodeType: node.type,
+        status: "failed" as StepStatus,
+        attempt: 0,
+        error: options.failureReason ? {
+          code: "PLANNING_FAILED",
+          message: options.failureReason,
+        } : undefined,
+        createdAt: now,
+        updatedAt: now,
+      };
+    }
+
     // A node is ready to run if:
     // 1. It's the entry node, OR
     // 2. It has no explicit dependencies AND no incoming edges

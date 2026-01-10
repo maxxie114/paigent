@@ -7,7 +7,7 @@
  * Displays nodes with status-based styling and animated edges.
  */
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useEffect } from "react";
 import {
   ReactFlow,
   Node,
@@ -19,6 +19,8 @@ import {
   useEdgesState,
   MarkerType,
   ConnectionMode,
+  useReactFlow,
+  ReactFlowProvider,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
@@ -224,23 +226,21 @@ function calculateNodePositions(
 }
 
 /**
- * Run Graph Visualization Component.
+ * Inner component that has access to React Flow instance.
  *
- * @description Displays the workflow graph with interactive nodes
- * and animated edges showing execution progress.
+ * @description This component is wrapped by ReactFlowProvider to enable
+ * use of the useReactFlow hook for programmatic control.
  */
-export function RunGraphVisualization({
+function RunGraphInner({
   graph,
   stepStatuses = {},
   stepMetrics = {},
   selectedNodeId,
   onNodeClick,
-  // Note: onApprove is reserved for future use with approval node interactions
-  onApprove: _onApprove,
   readOnly = false,
-}: RunGraphProps) {
-  // Suppress unused parameter warning - will be used for approval functionality
-  void _onApprove;
+}: Omit<RunGraphProps, "onApprove">) {
+  const reactFlowInstance = useReactFlow();
+
   // Convert graph data to React Flow format
   const initialNodes = useMemo(
     () => graphToNodes(graph, stepStatuses, stepMetrics, selectedNodeId),
@@ -255,11 +255,27 @@ export function RunGraphVisualization({
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
-  // Update nodes when props change
-  useMemo(() => {
-    setNodes(graphToNodes(graph, stepStatuses, stepMetrics, selectedNodeId));
-    setEdges(graphToEdges(graph, stepStatuses));
-  }, [graph, stepStatuses, stepMetrics, selectedNodeId, setNodes, setEdges]);
+  /**
+   * Update nodes and edges when graph data changes.
+   * Uses useEffect instead of useMemo because setNodes/setEdges are side effects.
+   */
+  useEffect(() => {
+    const newNodes = graphToNodes(graph, stepStatuses, stepMetrics, selectedNodeId);
+    const newEdges = graphToEdges(graph, stepStatuses);
+    setNodes(newNodes);
+    setEdges(newEdges);
+
+    // After updating nodes, fit the view to show all nodes
+    // Small timeout ensures React Flow has rendered the new nodes
+    setTimeout(() => {
+      if (newNodes.length > 0) {
+        reactFlowInstance.fitView({
+          padding: 0.2,
+          duration: 200,
+        });
+      }
+    }, 50);
+  }, [graph, stepStatuses, stepMetrics, selectedNodeId, setNodes, setEdges, reactFlowInstance]);
 
   // Handle node click
   const handleNodeClick = useCallback(
@@ -270,41 +286,84 @@ export function RunGraphVisualization({
   );
 
   return (
-    <div className="w-full h-full min-h-[500px] bg-background rounded-lg border border-border">
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={readOnly ? undefined : onNodesChange}
-        onEdgesChange={readOnly ? undefined : onEdgesChange}
-        onNodeClick={handleNodeClick}
-        nodeTypes={nodeTypes}
-        connectionMode={ConnectionMode.Loose}
-        fitView
-        fitViewOptions={{
-          padding: 0.2,
-          minZoom: 0.5,
-          maxZoom: 1.5,
-        }}
-        minZoom={0.25}
-        maxZoom={2}
-        defaultEdgeOptions={{
-          type: "smoothstep",
-        }}
-        proOptions={{
-          hideAttribution: true,
-        }}
-      >
-        <Controls
-          showInteractive={false}
-          className="bg-card border border-border rounded-lg"
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      onNodesChange={readOnly ? undefined : onNodesChange}
+      onEdgesChange={readOnly ? undefined : onEdgesChange}
+      onNodeClick={handleNodeClick}
+      nodeTypes={nodeTypes}
+      connectionMode={ConnectionMode.Loose}
+      fitView
+      fitViewOptions={{
+        padding: 0.2,
+        minZoom: 0.5,
+        maxZoom: 1.5,
+      }}
+      minZoom={0.25}
+      maxZoom={2}
+      defaultEdgeOptions={{
+        type: "smoothstep",
+      }}
+      proOptions={{
+        hideAttribution: true,
+      }}
+    >
+      <Controls
+        showInteractive={false}
+        className="bg-card border border-border rounded-lg"
+      />
+      <Background
+        variant={BackgroundVariant.Dots}
+        gap={20}
+        size={1}
+        color="hsl(var(--muted-foreground) / 0.2)"
+      />
+    </ReactFlow>
+  );
+}
+
+/**
+ * Run Graph Visualization Component.
+ *
+ * @description Displays the workflow graph with interactive nodes
+ * and animated edges showing execution progress.
+ * Wrapped in ReactFlowProvider for proper React Flow context.
+ */
+export function RunGraphVisualization({
+  graph,
+  stepStatuses = {},
+  stepMetrics = {},
+  selectedNodeId,
+  onNodeClick,
+  // Note: onApprove is reserved for future use with approval node interactions
+  onApprove: _onApprove,
+  readOnly = false,
+}: RunGraphProps) {
+  // Suppress unused parameter warning - will be used for approval functionality
+  void _onApprove;
+
+  // Don't render if graph has no nodes
+  if (!graph || !graph.nodes || graph.nodes.length === 0) {
+    return (
+      <div className="w-full h-[500px] bg-background rounded-lg border border-border flex items-center justify-center">
+        <p className="text-muted-foreground">No workflow graph to display</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full h-[500px] bg-background rounded-lg border border-border">
+      <ReactFlowProvider>
+        <RunGraphInner
+          graph={graph}
+          stepStatuses={stepStatuses}
+          stepMetrics={stepMetrics}
+          selectedNodeId={selectedNodeId}
+          onNodeClick={onNodeClick}
+          readOnly={readOnly}
         />
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={20}
-          size={1}
-          color="hsl(var(--muted-foreground) / 0.2)"
-        />
-      </ReactFlow>
+      </ReactFlowProvider>
     </div>
   );
 }

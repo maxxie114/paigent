@@ -397,6 +397,7 @@ export type RunStepDocument = {
  */
 export type RunEventType =
   | "RUN_CREATED"
+  | "RUN_PLANNING_FAILED"
   | "RUN_STARTED"
   | "RUN_PAUSED"
   | "RUN_RESUMED"

@@ -122,16 +122,29 @@ export default function NewRunPage() {
           throw new Error(data.error || "Failed to create run");
         }
 
-        // Show generated graph
+        // Check if planning failed
+        const planningFailed = data.data.planning?.success === false;
+        
+        // Show generated graph (even for fallback graph)
         if (data.data.graph) {
           setGeneratedGraph(data.data.graph);
-          toast.success("Workflow planned successfully!");
+          
+          if (planningFailed) {
+            // Planning failed - show error and still navigate to see details
+            toast.error(
+              data.data.planning?.error || 
+              "Workflow planning failed. Please try rephrasing your request.",
+              { duration: 5000 }
+            );
+          } else {
+            toast.success("Workflow planned successfully!");
+          }
         }
 
-        // Navigate to run detail page after a delay
+        // Navigate to run detail page after a delay (shorter for errors)
         setTimeout(() => {
           router.push(`/runs/${data.data.runId}`);
-        }, 2000);
+        }, planningFailed ? 1000 : 2000);
       } catch (error) {
         console.error("Error creating run:", error);
         toast.error(

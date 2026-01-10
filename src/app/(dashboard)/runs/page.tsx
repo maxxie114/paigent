@@ -4,6 +4,7 @@
  * Runs List Page
  *
  * @description Lists all workflow runs with filtering and pagination.
+ * Fetches runs from MongoDB via the API with workspace-level access control.
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -30,9 +31,10 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 /**
- * Status configuration.
+ * Status configuration for display styling.
  */
 const STATUS_CONFIG: Record<
   string,
@@ -48,7 +50,7 @@ const STATUS_CONFIG: Record<
 };
 
 /**
- * Run item type.
+ * Run item type for display.
  */
 type RunItem = {
   id: string;
@@ -61,90 +63,147 @@ type RunItem = {
 
 /**
  * Runs List Page.
+ *
+ * @description Displays a paginated, filterable list of workflow runs.
+ * Automatically fetches the user's default workspace and loads runs from MongoDB.
  */
 export default function RunsPage() {
   const [runs, setRuns] = useState<RunItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [_loadingWorkspace, setLoadingWorkspace] = useState(true);
+  const [workspaceId, setWorkspaceId] = useState<string | undefined>(undefined);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
 
-  // Fetch runs
+  /**
+   * Fetch the user's default workspace on mount.
+   */
+  useEffect(() => {
+    async function fetchWorkspace() {
+      try {
+        setLoadingWorkspace(true);
+        const res = await fetch("/api/workspaces");
+        const data = await res.json();
+
+        if (!data.success || !data.data?.workspaces?.length) {
+          throw new Error(data.error || "No workspace found");
+        }
+
+        // Use the first workspace (default workspace)
+        setWorkspaceId(data.data.workspaces[0].id);
+      } catch (error) {
+        console.error("Error fetching workspace:", error);
+        toast.error("Failed to load workspace. Please refresh the page.");
+      } finally {
+        setLoadingWorkspace(false);
+      }
+    }
+
+    fetchWorkspace();
+  }, []);
+
+  /**
+   * Fetch runs from the API.
+   *
+   * @description Fetches workflow runs from MongoDB via the API.
+   * Requires workspaceId to be loaded first.
+   * Supports filtering by status and search query, with pagination.
+   */
   const fetchRuns = useCallback(async () => {
+    // Wait for workspace to be loaded
+    if (!workspaceId) {
+      return;
+    }
+
     setLoading(true);
     try {
-      // In production, fetch from API
-      // const res = await fetch(`/api/runs?page=${page}&status=${statusFilter}`);
-      // const data = await res.json();
-
-      // Mock data for now
-      const mockRuns: RunItem[] = [
-        {
-          id: "run_1",
-          intent: "Summarize top 10 AI news articles from today",
-          status: "succeeded",
-          cost: "$0.25",
-          createdAt: "2025-01-10T08:30:00Z",
-          duration: "2m 15s",
-        },
-        {
-          id: "run_2",
-          intent: "Generate weekly competitor analysis report",
-          status: "running",
-          cost: "$0.15",
-          createdAt: "2025-01-10T08:15:00Z",
-        },
-        {
-          id: "run_3",
-          intent: "Process customer feedback and categorize",
-          status: "paused_for_approval",
-          cost: "$0.50",
-          createdAt: "2025-01-10T07:45:00Z",
-        },
-        {
-          id: "run_4",
-          intent: "Scrape and analyze 5 product listings",
-          status: "failed",
-          cost: "$0.10",
-          createdAt: "2025-01-10T07:00:00Z",
-          duration: "45s",
-        },
-        {
-          id: "run_5",
-          intent: "Generate social media content calendar",
-          status: "succeeded",
-          cost: "$0.35",
-          createdAt: "2025-01-09T16:30:00Z",
-          duration: "3m 42s",
-        },
-      ];
-
-      // Filter by status
-      let filtered = mockRuns;
+      // Build query params
+      const params = new URLSearchParams();
+      params.set("workspaceId", workspaceId);
+      params.set("page", page.toString());
+      params.set("pageSize", "20");
       if (statusFilter !== "all") {
-        filtered = mockRuns.filter((r) => r.status === statusFilter);
+        params.set("status", statusFilter);
       }
 
-      // Filter by search
-      if (searchQuery) {
-        filtered = filtered.filter((r) =>
-          r.intent.toLowerCase().includes(searchQuery.toLowerCase())
-        );
-      }
+      const res = await fetch(`/api/runs?${params.toString()}`);
+      const data = await res.json();
 
-      setRuns(filtered);
-      setHasMore(filtered.length >= 20);
+      if (data.success && data.data?.runs) {
+        // Map API response to RunItem format
+        const mappedRuns: RunItem[] = data.data.runs.map((run: {
+          id: string;
+          status: string;
+          input: { text: string };
+          budget: { spentAtomic: string; maxAtomic: string };
+          createdAt: string;
+          updatedAt?: string;
+        }) => {
+          // Calculate cost from atomic units (USDC has 6 decimals)
+          const spentUsdc = Number(run.budget.spentAtomic) / 1_000_000;
+          
+          // Calculate duration if run has completed (rough estimate from timestamps)
+          let duration: string | undefined;
+          if (run.updatedAt && (run.status === "succeeded" || run.status === "failed")) {
+            const startMs = new Date(run.createdAt).getTime();
+            const endMs = new Date(run.updatedAt).getTime();
+            const durationMs = endMs - startMs;
+            if (durationMs > 0) {
+              if (durationMs < 60000) {
+                duration = `${Math.round(durationMs / 1000)}s`;
+              } else {
+                const mins = Math.floor(durationMs / 60000);
+                const secs = Math.round((durationMs % 60000) / 1000);
+                duration = `${mins}m ${secs}s`;
+              }
+            }
+          }
+
+          return {
+            id: run.id,
+            intent: run.input.text,
+            status: run.status,
+            cost: `$${spentUsdc.toFixed(2)}`,
+            createdAt: run.createdAt,
+            duration,
+          };
+        });
+
+        // Filter by search query (client-side for simplicity)
+        let filtered = mappedRuns;
+        if (searchQuery) {
+          filtered = filtered.filter((r) =>
+            r.intent.toLowerCase().includes(searchQuery.toLowerCase())
+          );
+        }
+
+        setRuns(filtered);
+        setHasMore(data.data.hasMore ?? false);
+      } else {
+        // API error - show empty state
+        console.error("Failed to fetch runs:", data.error);
+        setRuns([]);
+        setHasMore(false);
+      }
     } catch (error) {
       console.error("Failed to fetch runs:", error);
+      setRuns([]);
+      setHasMore(false);
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, searchQuery]);
+  }, [workspaceId, page, statusFilter, searchQuery]);
 
+  /**
+   * Fetch runs when workspace is loaded or filters change.
+   */
   useEffect(() => {
-    fetchRuns();
-  }, [fetchRuns]);
+    if (workspaceId) {
+      fetchRuns();
+    }
+  }, [workspaceId, fetchRuns]);
 
   // Format date
   const formatDate = (dateString: string) => {

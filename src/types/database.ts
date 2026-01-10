@@ -227,6 +227,7 @@ export type StepError = z.infer<typeof StepErrorSchema>;
  */
 export const RunEventTypeSchema = z.enum([
   "RUN_CREATED",
+  "RUN_PLANNING_FAILED",
   "RUN_STARTED",
   "RUN_PAUSED",
   "RUN_RESUMED",

@@ -19,7 +19,18 @@ import {
 /**
  * Create a new run.
  *
+ * @description Creates a new workflow run document in MongoDB.
+ * Optionally accepts an initial status to override the default "queued" status.
+ * This is useful when planning fails and the run should be marked as "failed" immediately.
+ *
  * @param params - Run creation parameters.
+ * @param params.workspaceId - The workspace ObjectId.
+ * @param params.createdByClerkUserId - The Clerk user ID who created the run.
+ * @param params.input - The run input containing intent and optional voice transcript.
+ * @param params.graph - The workflow graph (either generated or fallback).
+ * @param params.budget - The budget configuration for this run.
+ * @param params.autoPayPolicy - The workspace's auto-pay policy settings.
+ * @param params.initialStatus - Optional initial status override (e.g., "failed" if planning failed).
  * @returns The created run document.
  */
 export async function createRun(params: {
@@ -29,6 +40,7 @@ export async function createRun(params: {
   graph: RunGraph;
   budget: RunBudget;
   autoPayPolicy: WorkspaceSettings;
+  initialStatus?: RunStatus;
 }): Promise<RunDocument> {
   const {
     workspaceId,
@@ -37,6 +49,7 @@ export async function createRun(params: {
     graph,
     budget,
     autoPayPolicy,
+    initialStatus,
   } = params;
 
   const runs = await collections.runs();
@@ -46,7 +59,7 @@ export async function createRun(params: {
     _id: new ObjectId(),
     workspaceId,
     createdByClerkUserId,
-    status: "queued",
+    status: initialStatus ?? "queued",
     input,
     graph,
     budget,
