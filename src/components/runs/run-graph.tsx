@@ -210,7 +210,7 @@ function calculateNodePositions(
 
   for (const [layer, nodeIds] of layerGroups) {
     const totalWidth = nodeIds.length * NODE_WIDTH + (nodeIds.length - 1) * PADDING;
-    let startX = -totalWidth / 2;
+    const startX = -totalWidth / 2;
 
     for (let i = 0; i < nodeIds.length; i++) {
       positions.set(nodeIds[i], {
@@ -235,9 +235,12 @@ export function RunGraphVisualization({
   stepMetrics = {},
   selectedNodeId,
   onNodeClick,
-  onApprove,
+  // Note: onApprove is reserved for future use with approval node interactions
+  onApprove: _onApprove,
   readOnly = false,
 }: RunGraphProps) {
+  // Suppress unused parameter warning - will be used for approval functionality
+  void _onApprove;
   // Convert graph data to React Flow format
   const initialNodes = useMemo(
     () => graphToNodes(graph, stepStatuses, stepMetrics, selectedNodeId),

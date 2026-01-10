@@ -8,7 +8,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { ObjectId } from "mongodb";
 
-import { collections } from "@/lib/db/collections";
 import { verifyMembership } from "@/lib/db/queries/workspaces";
 import { getRun, updateRunStatus } from "@/lib/db/queries/runs";
 import { getStepsForRun } from "@/lib/db/queries/steps";

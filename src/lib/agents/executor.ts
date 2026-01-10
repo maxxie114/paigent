@@ -7,12 +7,10 @@
  * @see paigent-studio-spec.md Section 14
  */
 
-import { ObjectId, Db } from "mongodb";
-import { getDb } from "@/lib/db/client";
+import { Db } from "mongodb";
 import {
   RunStepDocument,
   RunDocument,
-  RunEventType,
   StepError,
 } from "@/lib/db/collections";
 import {
@@ -84,12 +82,14 @@ function normalizeError(error: unknown): StepError {
  * @description Makes an HTTP request to the tool endpoint.
  * Handles x402 payment flows when required.
  */
+/* eslint-disable @typescript-eslint/no-unused-vars */
 async function executeToolCall(
-  db: Db,
+  _db: Db,
   step: RunStepDocument,
-  run: RunDocument,
-  workerId: string
+  _run: RunDocument,
+  _workerId: string
 ): Promise<StepExecutionResult> {
+  /* eslint-enable @typescript-eslint/no-unused-vars */
   const startTime = Date.now();
 
   // For now, simulate tool call execution
@@ -117,12 +117,14 @@ async function executeToolCall(
  *
  * @description Calls the LLM for analysis, summarization, or decision-making.
  */
+/* eslint-disable @typescript-eslint/no-unused-vars */
 async function executeLLMReason(
-  db: Db,
+  _db: Db,
   step: RunStepDocument,
   run: RunDocument,
-  workerId: string
+  _workerId: string
 ): Promise<StepExecutionResult> {
+  /* eslint-enable @typescript-eslint/no-unused-vars */
   const startTime = Date.now();
 
   try {
@@ -188,12 +190,14 @@ async function executeLLMReason(
  *
  * @description Blocks execution until user approval.
  */
+/* eslint-disable @typescript-eslint/no-unused-vars */
 async function executeApproval(
-  db: Db,
-  step: RunStepDocument,
-  run: RunDocument,
-  workerId: string
+  _db: Db,
+  _step: RunStepDocument,
+  _run: RunDocument,
+  _workerId: string
 ): Promise<StepExecutionResult> {
+  /* eslint-enable @typescript-eslint/no-unused-vars */
   // Mark as blocked and wait for user action
   return {
     status: "blocked",
@@ -209,12 +213,14 @@ async function executeApproval(
  *
  * @description Polls a status endpoint until completion.
  */
+/* eslint-disable @typescript-eslint/no-unused-vars */
 async function executeWait(
-  db: Db,
-  step: RunStepDocument,
-  run: RunDocument,
-  workerId: string
+  _db: Db,
+  _step: RunStepDocument,
+  _run: RunDocument,
+  _workerId: string
 ): Promise<StepExecutionResult> {
+  /* eslint-enable @typescript-eslint/no-unused-vars */
   // For MVP, simulate wait completion
   await new Promise((resolve) => setTimeout(resolve, 1000));
 
@@ -232,12 +238,14 @@ async function executeWait(
  *
  * @description Collects outputs from multiple branches.
  */
+/* eslint-disable @typescript-eslint/no-unused-vars */
 async function executeMerge(
-  db: Db,
+  _db: Db,
   step: RunStepDocument,
-  run: RunDocument,
-  workerId: string
+  _run: RunDocument,
+  _workerId: string
 ): Promise<StepExecutionResult> {
+  /* eslint-enable @typescript-eslint/no-unused-vars */
   // Collect inputs from all upstream steps
   const inputs = step.inputs || {};
 
@@ -259,12 +267,14 @@ async function executeMerge(
  *
  * @description Produces the final output of the workflow.
  */
+/* eslint-disable @typescript-eslint/no-unused-vars */
 async function executeFinalize(
-  db: Db,
+  _db: Db,
   step: RunStepDocument,
   run: RunDocument,
-  workerId: string
+  _workerId: string
 ): Promise<StepExecutionResult> {
+  /* eslint-enable @typescript-eslint/no-unused-vars */
   const node = run.graph.nodes.find((n) => n.id === step.stepId);
   const outputTemplate = (node as { outputTemplate?: string })?.outputTemplate;
   const inputs = step.inputs || {};
@@ -308,8 +318,6 @@ export async function executeStep(
   step: RunStepDocument,
   workerId: string
 ): Promise<StepExecutionResult> {
-  const startTime = Date.now();
-
   try {
     // Get the run
     const run = await getRun(step.runId);

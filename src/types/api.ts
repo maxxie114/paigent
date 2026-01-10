@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod";
-import { RunStatusSchema, StepStatusSchema, ObjectIdSchema, AtomicAmountSchema } from "./database";
+import { RunStatusSchema, ObjectIdSchema, AtomicAmountSchema } from "./database";
 import { RunGraph } from "./graph";
 
 // =============================================================================

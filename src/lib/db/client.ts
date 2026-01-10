@@ -43,7 +43,6 @@ const options = {
  * Global type augmentation for caching in development.
  */
 declare global {
-  // eslint-disable-next-line no-var
   var _mongoClientPromise: Promise<MongoClient> | undefined;
 }
 

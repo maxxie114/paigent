@@ -8,6 +8,8 @@ import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { Play, Wallet, Clock, CheckCircle, AlertCircle, DollarSign } from "lucide-react";
+
+// Note: DashboardSkeleton is defined below for potential use in Suspense boundaries
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -162,8 +164,11 @@ function QuickActions() {
 
 /**
  * Dashboard Loading Skeleton.
+ *
+ * @description Loading placeholder for dashboard content.
+ * Exported for use in Suspense boundaries.
  */
-function DashboardSkeleton() {
+export function DashboardSkeleton() {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-4 gap-4">

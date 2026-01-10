@@ -165,7 +165,7 @@ export default function ToolsPage() {
       setNewToolName("");
       setNewToolDescription("");
       fetchTools();
-    } catch (error) {
+    } catch {
       toast.error("Failed to add tool");
     } finally {
       setAdding(false);

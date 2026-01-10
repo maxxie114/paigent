@@ -9,7 +9,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { Play, Search, Filter, RefreshCw, Eye, Loader2 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -140,7 +140,7 @@ export default function RunsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, statusFilter, searchQuery]);
+  }, [statusFilter, searchQuery]);
 
   useEffect(() => {
     fetchRuns();

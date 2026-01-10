@@ -39,7 +39,7 @@ export function DashboardHeader() {
   const pathname = usePathname();
   const [balance, setBalance] = useState<{ eth: string; usdc: string } | null>(null);
   const [loadingBalance, setLoadingBalance] = useState(true);
-  const [notifications, setNotifications] = useState(3);
+  const [notifications] = useState(3);
 
   // Get page title
   const pageTitle = PAGE_TITLES[pathname] || "Paigent Studio";
@@ -145,7 +145,7 @@ export function DashboardHeader() {
               <DropdownMenuItem className="flex flex-col items-start gap-1">
                 <span className="font-medium">Run completed</span>
                 <span className="text-xs text-muted-foreground">
-                  Workflow "Summarize articles" finished successfully
+                  Workflow &quot;Summarize articles&quot; finished successfully
                 </span>
               </DropdownMenuItem>
               <DropdownMenuItem className="flex flex-col items-start gap-1">
@@ -157,7 +157,7 @@ export function DashboardHeader() {
               <DropdownMenuItem className="flex flex-col items-start gap-1">
                 <span className="font-medium">New tool available</span>
                 <span className="text-xs text-muted-foreground">
-                  "Data Analysis API" added to registry
+                  &quot;Data Analysis API&quot; added to registry
                 </span>
               </DropdownMenuItem>
             </DropdownMenuContent>

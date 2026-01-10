@@ -7,11 +7,9 @@
  * @see paigent-studio-spec.md Section 14.3
  */
 
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { ObjectId } from "mongodb";
-
-import { getDb } from "@/lib/db/client";
 import { verifyMembership } from "@/lib/db/queries/workspaces";
 import { getRun } from "@/lib/db/queries/runs";
 import { getEventsSince } from "@/lib/db/queries/events";

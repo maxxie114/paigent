@@ -8,7 +8,7 @@
  */
 
 import { z } from "zod";
-import { AtomicAmountSchema, HttpMethodSchema } from "./database";
+import { AtomicAmountSchema } from "./database";
 
 // =============================================================================
 // Node Types

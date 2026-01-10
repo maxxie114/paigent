@@ -225,7 +225,7 @@ export function useVoiceInput(
       setError(message);
       onError?.(message);
     }
-  }, [maxDuration, onError, startAudioLevelMonitoring]);
+  }, [maxDuration, onError, startAudioLevelMonitoring, stopRecording]);
 
   /**
    * Stop recording and transcribe.

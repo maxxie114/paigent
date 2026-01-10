@@ -3,12 +3,10 @@ import {
   collections,
   RunStepDocument,
   StepStatus,
-  NodeType,
   StepError,
   StepLock,
   RunGraph,
 } from "../collections";
-import { getDb } from "../client";
 
 /**
  * Step Query Helpers
@@ -319,7 +317,6 @@ export async function unblockDependentSteps(
   completedStepId: string,
   graph: { nodes: Array<{ id: string; dependsOn?: string[] }>; edges: Array<{ from: string; to: string; type: string }> }
 ): Promise<number> {
-  const steps = await collections.runSteps();
   const allSteps = await getStepsForRun(runId);
 
   // Find nodes that have the completed step as a dependency

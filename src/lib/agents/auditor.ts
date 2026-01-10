@@ -9,7 +9,6 @@
 
 import { ObjectId } from "mongodb";
 import { z } from "zod";
-import { getDb } from "@/lib/db/client";
 import { collections } from "@/lib/db/collections";
 import { callLLM, FIREWORKS_MODELS } from "@/lib/fireworks/client";
 import { extractJsonWithRepair } from "@/lib/utils/json-parser";
@@ -138,7 +137,6 @@ Output ONLY valid JSON matching this structure:
  * ```
  */
 export async function auditRun(runId: ObjectId): Promise<AuditReport> {
-  const db = await getDb();
 
   // Gather run data
   const runsCollection = await collections.runs();

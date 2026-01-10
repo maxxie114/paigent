@@ -14,7 +14,8 @@ import { isCdpConfigured } from "@/lib/cdp/client";
  *
  * @description Returns the agent wallet address and balances.
  */
-export async function GET(req: NextRequest): Promise<NextResponse> {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export async function GET(_req: NextRequest): Promise<NextResponse> {
   try {
     // Authenticate
     const { userId } = await auth();

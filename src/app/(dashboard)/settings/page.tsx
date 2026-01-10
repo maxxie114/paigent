@@ -7,10 +7,9 @@
  */
 
 import { useState } from "react";
-import { Settings, Save, Shield, Bell, Wallet, Users, Loader2 } from "lucide-react";
+import { Save, Shield, Bell, Wallet, Users, Loader2 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
@@ -41,7 +40,7 @@ export default function SettingsPage() {
       // In production, save to API
       await new Promise((resolve) => setTimeout(resolve, 1000));
       toast.success("Settings saved successfully!");
-    } catch (error) {
+    } catch {
       toast.error("Failed to save settings");
     } finally {
       setSaving(false);

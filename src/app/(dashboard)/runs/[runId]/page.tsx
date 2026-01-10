@@ -7,12 +7,11 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
   Play,
-  Pause,
   XCircle,
   CheckCircle,
   RefreshCw,
@@ -68,7 +67,6 @@ type RunData = {
  */
 export default function RunDetailPage() {
   const params = useParams();
-  const router = useRouter();
   const runId = params.runId as string;
 
   const [run, setRun] = useState<RunData | null>(null);
@@ -76,7 +74,7 @@ export default function RunDetailPage() {
   const [selectedStep, setSelectedStep] = useState<string | null>(null);
 
   // Subscribe to real-time events
-  const { events, connected, isComplete, error: sseError } = useRunEvents(runId, {
+  const { events, connected } = useRunEvents(runId, {
     enabled: !!runId && !loading,
     onEvent: (event) => {
       // Update run state based on event
@@ -142,7 +140,7 @@ export default function RunDetailPage() {
       } else {
         toast.error(data.error || `Failed to ${action} run`);
       }
-    } catch (error) {
+    } catch {
       toast.error(`Failed to ${action} run`);
     }
   };

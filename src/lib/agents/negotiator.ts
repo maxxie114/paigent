@@ -137,7 +137,6 @@ export async function negotiatePayment(
 
   const amount = BigInt(amountAtomic);
   const maxPerStep = BigInt(autoPayPolicy.autoPayMaxPerStepAtomic);
-  const maxPerRun = BigInt(autoPayPolicy.autoPayMaxPerRunAtomic);
   const remaining = BigInt(budgetRemaining);
 
   // Check per-step limit

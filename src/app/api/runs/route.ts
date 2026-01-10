@@ -7,10 +7,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { ObjectId } from "mongodb";
-import { z } from "zod";
-
-import { getDb } from "@/lib/db/client";
-import { collections, type ToolDocument } from "@/lib/db/collections";
+import { collections } from "@/lib/db/collections";
 import { verifyMembership, getWorkspace } from "@/lib/db/queries/workspaces";
 import { createRun, getRunsForWorkspace } from "@/lib/db/queries/runs";
 import { createStepsFromGraph } from "@/lib/db/queries/steps";

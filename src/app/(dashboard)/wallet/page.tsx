@@ -117,11 +117,6 @@ export default function WalletPage() {
     }
   }, [fetchBalance]);
 
-  // Format short address
-  const shortAddress = balance?.address
-    ? `${balance.address.slice(0, 6)}...${balance.address.slice(-4)}`
-    : "";
-
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       {/* Header */}

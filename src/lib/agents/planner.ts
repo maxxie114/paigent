@@ -8,8 +8,8 @@
  */
 
 import { callLLM, FIREWORKS_MODELS } from "@/lib/fireworks/client";
-import { extractFirstJsonValue, extractJsonWithRepair } from "@/lib/utils/json-parser";
-import { RunGraphSchema, RunGraph, validateGraph } from "@/types/graph";
+import { extractJsonWithRepair } from "@/lib/utils/json-parser";
+import { RunGraph, validateGraph } from "@/types/graph";
 import { PLANNER_SYSTEM_PROMPT, createPlannerUserPrompt, createRetryPrompt } from "@/lib/fireworks/prompts/planner";
 import type { ToolDocument, WorkspaceSettings } from "@/lib/db/collections";
 

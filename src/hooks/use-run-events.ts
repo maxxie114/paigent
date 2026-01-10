@@ -80,6 +80,7 @@ export function useRunEvents(
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0);
+  const connectRef = useRef<(() => void) | null>(null);
 
   /**
    * Calculate reconnection delay with exponential backoff.
@@ -167,7 +168,8 @@ export function useRunEvents(
         const delay = getReconnectDelay();
 
         reconnectTimeoutRef.current = setTimeout(() => {
-          connect();
+          // Use the ref to call the current version of connect
+          connectRef.current?.();
         }, delay);
 
         if (reconnectAttempts.current > 5) {
@@ -188,8 +190,16 @@ export function useRunEvents(
     onError,
   ]);
 
-  // Connect on mount and when runId changes
+  // Keep connectRef up to date with the latest connect function
   useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
+
+  // Connect on mount and when runId changes
+  // Note: This effect intentionally calls connect() which may trigger setState.
+  // This is the correct pattern for subscribing to external event sources (SSE).
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     connect();
     return () => disconnect();
   }, [connect, disconnect, runId]);
