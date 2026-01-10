@@ -10,13 +10,14 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 
 /**
  * Public routes that do not require authentication.
- * Includes auth pages, API webhooks, and cron endpoints.
+ * Includes landing page, auth pages, API webhooks, and cron endpoints.
  */
 const isPublicRoute = createRouteMatcher([
+  "/",              // Landing page
   "/sign-in(.*)",
   "/sign-up(.*)",
   "/api/webhooks(.*)",
-  "/api/cron(.*)", // Cron jobs use their own authentication
+  "/api/cron(.*)",  // Cron jobs use their own authentication
 ]);
 
 /**
