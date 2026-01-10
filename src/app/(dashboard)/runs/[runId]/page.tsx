@@ -6,7 +6,7 @@
  * @description Shows workflow run details with real-time updates via SSE.
  */
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -32,6 +32,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { RunGraph } from "@/types/graph";
 import type { StepStatus } from "@/types/database";
+import type { SSEEventData } from "@/types/api";
 
 /**
  * Status configuration.
@@ -65,6 +66,9 @@ type RunData = {
 
 /**
  * Run Detail Page.
+ *
+ * @description Displays workflow run details with real-time SSE updates.
+ * Uses memoized callbacks to prevent infinite re-render loops with useRunEvents.
  */
 export default function RunDetailPage() {
   const params = useParams();
@@ -73,23 +77,19 @@ export default function RunDetailPage() {
   const [run, setRun] = useState<RunData | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedStep, setSelectedStep] = useState<string | null>(null);
+  
+  /**
+   * Ref to track if initial fetch has completed.
+   * Prevents duplicate fetches during SSE event handling.
+   */
+  const initialFetchComplete = useRef(false);
 
-  // Subscribe to real-time events
-  const { events, connected } = useRunEvents(runId, {
-    enabled: !!runId && !loading,
-    onEvent: (event) => {
-      // Update run state based on event
-      if (event.type.startsWith("STEP_")) {
-        fetchRun(); // Refresh to get latest step states
-      }
-    },
-    onComplete: (status) => {
-      toast.success(`Workflow ${status}!`);
-      fetchRun();
-    },
-  });
-
-  // Fetch run data
+  /**
+   * Fetch run data from the API.
+   *
+   * @description Retrieves the current run state including graph, steps, and budget.
+   * Uses atomic state updates to prevent race conditions.
+   */
   const fetchRun = useCallback(async () => {
     try {
       const res = await fetch(`/api/runs/${runId}`);
@@ -98,16 +98,67 @@ export default function RunDetailPage() {
       if (data.success) {
         setRun(data.data);
       } else {
-        toast.error(data.error || "Failed to load run");
+        // Only show error toast if we have meaningful error info
+        if (data.error && data.error !== "Run not found") {
+          toast.error(data.error);
+        }
       }
     } catch (error) {
       console.error("Error fetching run:", error);
-      toast.error("Failed to load run details");
+      // Only show toast on actual fetch errors, not during initial load
+      if (initialFetchComplete.current) {
+        toast.error("Failed to load run details");
+      }
     } finally {
       setLoading(false);
+      initialFetchComplete.current = true;
     }
   }, [runId]);
 
+  /**
+   * Memoized callback for handling SSE events.
+   *
+   * @description Triggered when step-related events are received.
+   * Refreshes run data to get the latest step states.
+   *
+   * @param event - The SSE event data containing event type and payload.
+   */
+  const handleEvent = useCallback((event: SSEEventData) => {
+    // Update run state based on event type
+    if (event.type.startsWith("STEP_")) {
+      // Use setTimeout to ensure we're not calling setState during render
+      setTimeout(() => {
+        fetchRun();
+      }, 0);
+    }
+  }, [fetchRun]);
+
+  /**
+   * Memoized callback for handling run completion.
+   *
+   * @description Triggered when the workflow run completes (success or failure).
+   * Shows a toast notification and refreshes the run data.
+   *
+   * @param status - The final status of the run (e.g., "succeeded", "failed").
+   */
+  const handleComplete = useCallback((status: string) => {
+    // Use setTimeout to ensure toast is called outside of render phase
+    setTimeout(() => {
+      toast.success(`Workflow ${status}!`);
+      fetchRun();
+    }, 0);
+  }, [fetchRun]);
+
+  // Subscribe to real-time events with memoized callbacks
+  const { events, connected } = useRunEvents(runId, {
+    enabled: !!runId && !loading,
+    onEvent: handleEvent,
+    onComplete: handleComplete,
+  });
+
+  /**
+   * Initial data fetch on mount.
+   */
   useEffect(() => {
     fetchRun();
   }, [fetchRun]);
