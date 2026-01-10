@@ -3,14 +3,19 @@
  *
  * @description Performs QA and audit review of completed workflow runs.
  * Generates reports on success, policy compliance, and cost efficiency.
+ * Uses GLM-4.7 via Fireworks Responses API for comprehensive analysis.
  *
  * @see paigent-studio-spec.md Section 12.5
+ * @see https://docs.fireworks.ai/api-reference/post-responses
  */
 
 import { ObjectId } from "mongodb";
 import { z } from "zod";
 import { collections } from "@/lib/db/collections";
-import { callLLM, FIREWORKS_MODELS } from "@/lib/fireworks/client";
+import {
+  callWithSystemPrompt,
+  RESPONSES_API_MODELS,
+} from "@/lib/fireworks/responses";
 import { extractJsonWithRepair } from "@/lib/utils/json-parser";
 import { appendRunEvent } from "@/lib/db/queries/events";
 
@@ -174,11 +179,12 @@ export async function auditRun(runId: ObjectId): Promise<AuditReport> {
     externalDataAccessed: toolCalls.length > 0,
   };
 
-  // Generate LLM audit analysis
+  // Generate LLM audit analysis using GLM-4.7 via Responses API
   try {
-    const response = await callLLM({
-      systemPrompt: AUDITOR_SYSTEM_PROMPT,
-      userPrompt: `
+    const response = await callWithSystemPrompt(
+      {
+        systemPrompt: AUDITOR_SYSTEM_PROMPT,
+        userPrompt: `
 Run ID: ${runId.toString()}
 Status: ${run.status}
 Intent: "${run.input.text}"
@@ -202,10 +208,23 @@ ${events
   .join("\n")}
 
 Analyze this run and provide your assessment:`,
-      model: FIREWORKS_MODELS.GLM_4_9B,
-      maxTokens: 1024,
-      temperature: 0.5,
-    });
+        model: RESPONSES_API_MODELS.GLM_4P7,
+        maxOutputTokens: 1024,
+        temperature: 0.5,
+        // Enable reasoning for thorough audit analysis
+        reasoning: { effort: "medium" },
+        // Store audit responses for record-keeping
+        store: true,
+      },
+      {
+        spanName: "Auditor Analysis",
+        tags: ["auditor", "agent", "qa"],
+        metadata: {
+          runId: runId.toString(),
+          runStatus: run.status,
+        },
+      }
+    );
 
     const extracted = extractJsonWithRepair(response.text);
     const parsed = AuditOutputSchema.safeParse(extracted);

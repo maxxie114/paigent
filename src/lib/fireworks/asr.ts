@@ -28,6 +28,17 @@ export const WHISPER_MODELS = {
 export const DEFAULT_WHISPER_MODEL = WHISPER_MODELS.WHISPER_V3;
 
 /**
+ * Check if ASR is configured.
+ *
+ * @description Returns true if the FIREWORKS_API_KEY environment variable is set.
+ *
+ * @returns True if ASR can be used, false otherwise.
+ */
+export function isASRConfigured(): boolean {
+  return !!process.env.FIREWORKS_API_KEY;
+}
+
+/**
  * Transcription response from Fireworks ASR.
  */
 export type TranscriptionResult = {

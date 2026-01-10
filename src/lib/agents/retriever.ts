@@ -3,15 +3,20 @@
  *
  * @description Discovers and retrieves relevant tools using vector search.
  * Implements adaptive retrieval with query refinement.
+ * Uses GLM-4.7 via Fireworks Responses API for result critiquing.
  *
  * @see paigent-studio-spec.md Section 13
+ * @see https://docs.fireworks.ai/api-reference/post-responses
  */
 
 import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/db/client";
 import { collections, ToolDocument } from "@/lib/db/collections";
 import { generateEmbedding, isVoyageConfigured } from "@/lib/voyage/embeddings";
-import { callLLM, FIREWORKS_MODELS } from "@/lib/fireworks/client";
+import {
+  callWithSystemPrompt,
+  RESPONSES_API_MODELS,
+} from "@/lib/fireworks/responses";
 import { extractJsonWithRepair } from "@/lib/utils/json-parser";
 
 /**
@@ -161,8 +166,10 @@ async function critiqueToolResults(params: {
   const { intent, tools, iteration } = params;
 
   try {
-    const response = await callLLM({
-      systemPrompt: `You are a tool retrieval critic. Analyze whether the retrieved tools are sufficient for the user's intent.
+    // Use GLM-4.7 via Responses API for critiquing retrieval results
+    const response = await callWithSystemPrompt(
+      {
+        systemPrompt: `You are a tool retrieval critic. Analyze whether the retrieved tools are sufficient for the user's intent.
 
 Output JSON:
 {
@@ -172,7 +179,7 @@ Output JSON:
   "refinedQuery": "improved search query if not sufficient",
   "missingCapabilities": ["capability 1", "capability 2"]
 }`,
-      userPrompt: `
+        userPrompt: `
 Intent: "${intent}"
 Iteration: ${iteration + 1}
 
@@ -180,10 +187,17 @@ Retrieved tools (${tools.length}):
 ${tools.map((t) => `- ${t.tool.name} (score: ${t.score.toFixed(2)}): ${t.tool.description}`).join("\n")}
 
 Are these tools sufficient? If not, how should the query be refined?`,
-      model: FIREWORKS_MODELS.GLM_4_9B,
-      maxTokens: 512,
-      temperature: 0.5,
-    });
+        model: RESPONSES_API_MODELS.GLM_4P7,
+        maxOutputTokens: 512,
+        temperature: 0.5,
+        // Don't store critique responses to minimize storage
+        store: false,
+      },
+      {
+        spanName: "Retrieval Critique",
+        tags: ["retriever", "agent", "critique"],
+      }
+    );
 
     const extracted = extractJsonWithRepair(response.text);
     if (extracted && typeof extracted === "object") {

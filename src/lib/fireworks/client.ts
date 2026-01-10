@@ -1,12 +1,16 @@
 /**
  * Fireworks AI Client
  *
- * @description OpenAI-compatible client for Fireworks AI API.
- * Used for GLM-4.7 Thinking model and other LLM operations.
- * Includes Galileo observability integration for tracing LLM calls.
+ * @description OpenAI-compatible client for Fireworks AI Chat Completions API.
+ * For GLM-4.7 Thinking model with advanced reasoning, use the Responses API
+ * client in `@/lib/fireworks/responses` instead.
+ *
+ * This client is maintained for backward compatibility and for models that
+ * don't require the advanced features of the Responses API.
  *
  * @see https://fireworks.ai/docs/tools-sdks/openai-compatibility
  * @see https://fireworks.ai/docs/guides/querying-text-models
+ * @see https://docs.fireworks.ai/api-reference/post-responses (Responses API)
  */
 
 import OpenAI from "openai";
@@ -18,17 +22,37 @@ import {
 } from "@/lib/galileo/client";
 
 /**
- * Fireworks AI configuration.
+ * Fireworks AI Chat Completions API base URL.
  */
 const FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1";
 
 /**
  * Available Fireworks models.
+ *
+ * @remarks
+ * - For planning, reasoning, and agentic workflows, use `GLM_4P7` with the
+ *   Responses API (`@/lib/fireworks/responses`) for best results.
+ * - The older GLM-4 models are kept for backward compatibility but GLM-4.7
+ *   is significantly more capable for complex tasks.
  */
 export const FIREWORKS_MODELS = {
-  /** GLM-4 9B - Fast, efficient model for general tasks. */
+  /**
+   * GLM-4.7 - Next-generation model optimized for coding, reasoning,
+   * and agentic workflows. 202.8k context, supports function calling.
+   * Use with Responses API for advanced thinking controls.
+   *
+   * @see https://fireworks.ai/models/fireworks/glm-4p7
+   */
+  GLM_4P7: "accounts/fireworks/models/glm-4p7",
+  /**
+   * GLM-4 9B - Fast, efficient model for general tasks.
+   * @deprecated Prefer GLM_4P7 for better reasoning capabilities.
+   */
   GLM_4_9B: "accounts/fireworks/models/glm-4-9b-chat",
-  /** GLM-4 32B - More capable model for complex reasoning. */
+  /**
+   * GLM-4 32B - More capable model for complex reasoning.
+   * @deprecated Prefer GLM_4P7 for better reasoning capabilities.
+   */
   GLM_4_32B: "accounts/fireworks/models/glm-4-32b-chat",
   /** Llama 3.3 70B - High-quality open model. */
   LLAMA_3_70B: "accounts/fireworks/models/llama-v3p3-70b-instruct",
@@ -37,9 +61,12 @@ export const FIREWORKS_MODELS = {
 } as const;
 
 /**
- * Default model for planning and reasoning tasks.
+ * Default model for Chat Completions API.
+ *
+ * @remarks For planning and reasoning tasks, prefer using the Responses API
+ * with GLM-4.7 (`@/lib/fireworks/responses`).
  */
-export const DEFAULT_MODEL = FIREWORKS_MODELS.GLM_4_9B;
+export const DEFAULT_MODEL = FIREWORKS_MODELS.GLM_4P7;
 
 /**
  * Cached OpenAI client instance.

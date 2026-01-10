@@ -3,12 +3,17 @@
  *
  * @description Makes payment decisions based on tool pricing and budget constraints.
  * Determines whether to pay, skip, or ask for approval.
+ * Uses GLM-4.7 via Fireworks Responses API for nuanced decision-making.
  *
  * @see paigent-studio-spec.md Section 12.3
+ * @see https://docs.fireworks.ai/api-reference/post-responses
  */
 
 import { z } from "zod";
-import { callLLM, FIREWORKS_MODELS } from "@/lib/fireworks/client";
+import {
+  callWithSystemPrompt,
+  RESPONSES_API_MODELS,
+} from "@/lib/fireworks/responses";
 import { extractJsonWithRepair } from "@/lib/utils/json-parser";
 import type { WorkspaceSettings, ToolReputation } from "@/lib/db/collections";
 
@@ -179,11 +184,12 @@ export async function negotiatePayment(
     };
   }
 
-  // For medium amounts, use LLM for nuanced decision
+  // For medium amounts, use GLM-4.7 via Responses API for nuanced decision
   try {
-    const response = await callLLM({
-      systemPrompt: NEGOTIATOR_SYSTEM_PROMPT,
-      userPrompt: `
+    const response = await callWithSystemPrompt(
+      {
+        systemPrompt: NEGOTIATOR_SYSTEM_PROMPT,
+        userPrompt: `
 Tool: ${toolName}
 Price: $${formatUsdc(amountAtomic)} USDC (${amountAtomic} atomic)
 Budget remaining: $${formatUsdc(budgetRemaining)} USDC
@@ -199,10 +205,17 @@ Tool Reputation:
 ${valueAssessment ? `Value assessment: ${valueAssessment}` : ""}
 
 What is your decision?`,
-      model: FIREWORKS_MODELS.GLM_4_9B,
-      maxTokens: 256,
-      temperature: 0.3, // Lower temperature for more consistent decisions
-    });
+        model: RESPONSES_API_MODELS.GLM_4P7,
+        maxOutputTokens: 256,
+        temperature: 0.3, // Lower temperature for more consistent decisions
+        // Don't store negotiation decisions to minimize storage
+        store: false,
+      },
+      {
+        spanName: "Negotiator Decision",
+        tags: ["negotiator", "agent", "payment"],
+      }
+    );
 
     const extracted = extractJsonWithRepair(response.text);
     const parsed = NegotiationOutputSchema.safeParse(extracted);
