@@ -61,6 +61,15 @@ const clientEnvSchema = z.object({
     .string()
     .min(1, "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is required"),
 
+  /** Optional override for Clerk frontend API domain (without protocol). */
+  NEXT_PUBLIC_CLERK_FRONTEND_API: z.string().optional(),
+
+  /** Optional override for Clerk JS script URL. */
+  NEXT_PUBLIC_CLERK_JS_SCRIPT_URL: z.string().optional(),
+
+  /** Toggle to enable the internal Clerk proxy. */
+  NEXT_PUBLIC_CLERK_USE_PROXY: z.string().optional(),
+
   /** Sign-in URL for Clerk. */
   NEXT_PUBLIC_CLERK_SIGN_IN_URL: z.string().default("/sign-in"),
 
@@ -72,6 +81,9 @@ const clientEnvSchema = z.object({
 
   /** After sign-up redirect URL. */
   NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL: z.string().default("/"),
+
+  /** Optional proxy URL for Clerk requests (same-origin path). */
+  NEXT_PUBLIC_CLERK_PROXY_URL: z.string().optional(),
 });
 
 /**
@@ -136,12 +148,18 @@ export function getClientEnv(): ClientEnv {
   const clientEnv = {
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:
       process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+    NEXT_PUBLIC_CLERK_FRONTEND_API:
+      process.env.NEXT_PUBLIC_CLERK_FRONTEND_API,
+    NEXT_PUBLIC_CLERK_JS_SCRIPT_URL:
+      process.env.NEXT_PUBLIC_CLERK_JS_SCRIPT_URL,
+    NEXT_PUBLIC_CLERK_USE_PROXY: process.env.NEXT_PUBLIC_CLERK_USE_PROXY,
     NEXT_PUBLIC_CLERK_SIGN_IN_URL: process.env.NEXT_PUBLIC_CLERK_SIGN_IN_URL,
     NEXT_PUBLIC_CLERK_SIGN_UP_URL: process.env.NEXT_PUBLIC_CLERK_SIGN_UP_URL,
     NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL:
       process.env.NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL,
     NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL:
       process.env.NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL,
+    NEXT_PUBLIC_CLERK_PROXY_URL: process.env.NEXT_PUBLIC_CLERK_PROXY_URL,
   };
 
   const result = clientEnvSchema.safeParse(clientEnv);

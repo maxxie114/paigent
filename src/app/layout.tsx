@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { Toaster } from "@/components/ui/sonner";
+import { getClientEnv } from "@/lib/env";
 import "./globals.css";
 
 /**
@@ -65,8 +66,42 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const {
+    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+    NEXT_PUBLIC_CLERK_SIGN_IN_URL,
+    NEXT_PUBLIC_CLERK_SIGN_UP_URL,
+    NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL,
+    NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL,
+    NEXT_PUBLIC_CLERK_PROXY_URL,
+    NEXT_PUBLIC_CLERK_FRONTEND_API,
+    NEXT_PUBLIC_CLERK_JS_SCRIPT_URL,
+    NEXT_PUBLIC_CLERK_USE_PROXY,
+  } = getClientEnv();
+
+  const clerkJsUrl = resolveClerkJsUrl(
+    NEXT_PUBLIC_CLERK_FRONTEND_API,
+    NEXT_PUBLIC_CLERK_JS_SCRIPT_URL
+  );
+
+  const shouldUseProxy =
+    NEXT_PUBLIC_CLERK_USE_PROXY?.toLowerCase() === "true" &&
+    !!NEXT_PUBLIC_CLERK_PROXY_URL;
+
+  const clerkProviderProps = {
+    publishableKey: NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+    signInUrl: NEXT_PUBLIC_CLERK_SIGN_IN_URL,
+    signUpUrl: NEXT_PUBLIC_CLERK_SIGN_UP_URL,
+    afterSignInUrl: NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL,
+    afterSignUpUrl: NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL,
+    ...(shouldUseProxy
+      ? { proxyUrl: NEXT_PUBLIC_CLERK_PROXY_URL }
+      : {}),
+    ...(clerkJsUrl ? { clerkJSUrl: clerkJsUrl } : {}),
+  } as const;
+
   return (
     <ClerkProvider
+      {...clerkProviderProps}
       appearance={{
         baseTheme: undefined,
         variables: {
@@ -97,4 +132,28 @@ export default function RootLayout({
       </html>
     </ClerkProvider>
   );
+}
+
+function resolveClerkJsUrl(
+  frontendApi?: string,
+  override?: string
+): string | undefined {
+  if (override && override.trim().length > 0) {
+    return override;
+  }
+
+  if (!frontendApi) {
+    return undefined;
+  }
+
+  const sanitized = frontendApi
+    .replace(/^https?:\/\//, "")
+    .replace(/\/$/, "")
+    .trim();
+
+  if (sanitized.length === 0) {
+    return undefined;
+  }
+
+  return `https://${sanitized}/npm/@clerk/clerk-js@5/dist/clerk.browser.js`;
 }

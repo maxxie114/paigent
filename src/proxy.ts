@@ -17,6 +17,7 @@ const isPublicRoute = createRouteMatcher([
   "/sign-in(.*)",
   "/sign-up(.*)",
   "/api/webhooks(.*)",
+  "/api/clerk(.*)",
   "/api/cron(.*)",  // Cron jobs use their own authentication
 ]);
 
