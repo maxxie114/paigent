@@ -9,7 +9,7 @@
  * @see paigent-studio-spec.md Section 7.2 for collection definitions
  */
 
-import { MongoClient, ServerApiVersion } from "mongodb";
+import { MongoClient, ServerApiVersion, IndexSpecification, CreateIndexesOptions } from "mongodb";
 import * as dotenv from "dotenv";
 
 // Load environment variables
@@ -19,9 +19,17 @@ const MIGRATION_VERSION = 1;
 const MIGRATION_DESCRIPTION = "Initialize collections and indexes";
 
 /**
+ * Type definition for index configuration entries.
+ */
+type IndexDefinition = {
+  key: IndexSpecification;
+  options: CreateIndexesOptions & { name: string };
+};
+
+/**
  * Index definitions for each collection.
  */
-const INDEX_DEFINITIONS = {
+const INDEX_DEFINITIONS: Record<string, IndexDefinition[]> = {
   workspaces: [],
 
   workspace_members: [

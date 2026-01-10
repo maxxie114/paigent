@@ -8,12 +8,18 @@
  * @see https://www.coinbase.com/developer-platform/products/faucet
  */
 
+import { toAccount, type LocalAccount } from "viem/accounts";
 import { getCdpClient } from "./client";
 
 /**
  * The name for the Paigent agent wallet.
  */
 const AGENT_WALLET_NAME = "paigent-agent-wallet";
+
+/**
+ * Cached viem-compatible account for x402 signing.
+ */
+let cachedViemAccount: LocalAccount | undefined;
 
 /**
  * Base Sepolia network identifier.
@@ -104,36 +110,53 @@ export async function getOrCreateAgentWallet(): Promise<EvmAccount> {
 }
 
 /**
+ * Native ETH contract address (used by CDP SDK to identify native token).
+ */
+const NATIVE_ETH_ADDRESS = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
+
+/**
  * Get wallet balance.
  *
- * @description Fetches the ETH and USDC balances for a wallet address.
+ * @description Fetches the ETH and USDC balances for a wallet address using
+ * the CDP SDK's listTokenBalances method.
  *
  * @param address - The wallet address.
  * @returns The wallet balances.
+ *
+ * @see https://docs.cdp.coinbase.com/server-wallets/v2/using-the-wallet-api/token-balances
  */
 export async function getWalletBalance(address: string): Promise<WalletBalance> {
   const cdp = getCdpClient();
 
   try {
-    // Get ETH balance
-    const ethBalance = await cdp.evm.getBalance({
-      address,
+    // Use listTokenBalances to get all token balances (including native ETH)
+    const result = await cdp.evm.listTokenBalances({
+      address: address as `0x${string}`,
       network: BASE_SEPOLIA_NETWORK,
     });
 
-    // Get USDC balance
-    const usdcBalance = await cdp.evm.getTokenBalance({
-      address,
-      network: BASE_SEPOLIA_NETWORK,
-      tokenAddress: USDC_BASE_SEPOLIA,
-    });
+    // Initialize default values
+    let ethWei = "0";
+    let eth = "0.000000";
+    let usdcAtomic = "0";
+    let usdc = "0.00";
 
-    // Format balances
-    const ethWei = ethBalance.toString();
-    const eth = (Number(ethWei) / 1e18).toFixed(6);
+    // Parse balances from result
+    for (const item of result.balances) {
+      const contractAddress = item.token.contractAddress.toLowerCase();
+      const amount = item.amount.amount;
+      const decimals = item.amount.decimals;
 
-    const usdcAtomic = usdcBalance.toString();
-    const usdc = (Number(usdcAtomic) / 1e6).toFixed(2);
+      if (contractAddress === NATIVE_ETH_ADDRESS.toLowerCase()) {
+        // Native ETH balance
+        ethWei = String(amount);
+        eth = (Number(amount) / Math.pow(10, decimals)).toFixed(6);
+      } else if (contractAddress === USDC_BASE_SEPOLIA.toLowerCase()) {
+        // USDC balance
+        usdcAtomic = String(amount);
+        usdc = (Number(amount) / Math.pow(10, decimals)).toFixed(2);
+      }
+    }
 
     return {
       ethWei,
@@ -235,4 +258,76 @@ export async function checkSufficientBalance(
     requiredAtomic: requiredUsdcAtomic,
     shortfallAtomic: shortfall,
   };
+}
+
+/**
+ * Get a viem-compatible account for x402 payment signing.
+ *
+ * @description Returns a viem LocalAccount that wraps the CDP Server Wallet.
+ * This account can be used with x402 libraries that require a viem signer.
+ *
+ * The CDP Server Wallet v2 accounts are viem-compatible and support:
+ * - signMessage
+ * - signTypedData (EIP-712)
+ * - signTransaction
+ *
+ * @returns A viem-compatible LocalAccount for signing.
+ *
+ * @example
+ * ```typescript
+ * import { registerExactEvmScheme } from "@x402/evm/exact/client";
+ *
+ * const signer = await getViemCompatibleAccount();
+ * registerExactEvmScheme(client, { signer });
+ * ```
+ *
+ * @see https://docs.cdp.coinbase.com/server-wallets/v2/introduction/welcome
+ * @see https://github.com/coinbase/x402/blob/main/docs/getting-started/quickstart-for-buyers.md
+ */
+export async function getViemCompatibleAccount(): Promise<LocalAccount> {
+  if (cachedViemAccount) {
+    return cachedViemAccount;
+  }
+
+  const cdp = getCdpClient();
+
+  // Get or create the agent wallet account
+  const cdpAccount = await cdp.evm.getOrCreateAccount({
+    name: AGENT_WALLET_NAME,
+  });
+
+  // Convert CDP account to viem LocalAccount
+  // CDP Server Wallet v2 accounts implement the viem Account interface
+  const viemAccount = toAccount(cdpAccount);
+
+  // Cache for reuse
+  cachedViemAccount = viemAccount;
+
+  return viemAccount;
+}
+
+/**
+ * Get the raw CDP EVM account for advanced operations.
+ *
+ * @description Returns the raw CDP SDK account object for operations that
+ * require direct CDP SDK access (e.g., sending transactions, batch operations).
+ *
+ * @returns The CDP EVM account.
+ *
+ * @example
+ * ```typescript
+ * const account = await getCdpEvmAccount();
+ * const result = await cdp.evm.sendTransaction({
+ *   address: account.address,
+ *   transaction: { to: "0x...", value: parseEther("0.01") },
+ *   network: "base-sepolia",
+ * });
+ * ```
+ */
+export async function getCdpEvmAccount() {
+  const cdp = getCdpClient();
+
+  return await cdp.evm.getOrCreateAccount({
+    name: AGENT_WALLET_NAME,
+  });
 }

@@ -114,6 +114,8 @@ export function useVoiceInput(
   const animationFrameRef = useRef<number | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const startTimeRef = useRef<number>(0);
+  /** Ref to hold stopRecording function to avoid circular dependency. */
+  const stopRecordingRef = useRef<(() => Promise<void>) | null>(null);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -217,7 +219,7 @@ export function useVoiceInput(
 
         // Auto-stop at max duration
         if (elapsed >= maxDuration) {
-          stopRecording();
+          stopRecordingRef.current?.();
         }
       }, 1000);
     } catch (err) {
@@ -225,7 +227,7 @@ export function useVoiceInput(
       setError(message);
       onError?.(message);
     }
-  }, [maxDuration, onError, startAudioLevelMonitoring, stopRecording]);
+  }, [maxDuration, onError, startAudioLevelMonitoring]);
 
   /**
    * Stop recording and transcribe.
@@ -291,6 +293,11 @@ export function useVoiceInput(
       mediaRecorder.stop();
     });
   }, [isRecording, language, onTranscript, onError, stopAudioLevelMonitoring]);
+
+  // Keep the stopRecording ref updated to avoid circular dependency in startRecording
+  useEffect(() => {
+    stopRecordingRef.current = stopRecording;
+  }, [stopRecording]);
 
   /**
    * Cancel recording without transcribing.

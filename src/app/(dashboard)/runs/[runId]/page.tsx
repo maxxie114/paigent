@@ -6,7 +6,7 @@
  * @description Shows workflow run details with real-time updates via SSE.
  */
 
-import { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -30,7 +30,8 @@ import { RunGraphVisualization } from "@/components/runs/run-graph";
 import { useRunEvents } from "@/hooks/use-run-events";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import type { RunGraph, StepStatus } from "@/types/graph";
+import type { RunGraph } from "@/types/graph";
+import type { StepStatus } from "@/types/database";
 
 /**
  * Status configuration.

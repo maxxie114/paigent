@@ -34,7 +34,7 @@ const MAX_CONCURRENCY = 5;
  *
  * Security: Requires CRON_SECRET in Authorization header.
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+ 
 export async function POST(_req: NextRequest): Promise<NextResponse> {
   const startTime = Date.now();
 

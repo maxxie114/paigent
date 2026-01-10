@@ -28,6 +28,16 @@ const nextConfig: NextConfig = {
   },
 
   /**
+   * Turbopack configuration.
+   *
+   * @description Next.js 16+ uses Turbopack by default. This empty config
+   * acknowledges that the webpack config below may not be needed under Turbopack,
+   * as Turbopack automatically handles client-side exclusion of Node.js built-in
+   * modules (dns, net, tls, fs) without explicit fallback configuration.
+   */
+  turbopack: {},
+
+  /**
    * Headers configuration for API routes.
    */
   async headers() {

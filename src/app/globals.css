@@ -222,7 +222,7 @@
     @apply bg-muted border-muted-foreground/30;
   }
   .node-running {
-    @apply bg-cyan-accent/20 border-cyan-accent animate-pulse;
+    @apply bg-cyan/20 border-cyan animate-pulse;
   }
   .node-succeeded {
     @apply bg-success/20 border-success;

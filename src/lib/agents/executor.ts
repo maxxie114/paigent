@@ -82,14 +82,14 @@ function normalizeError(error: unknown): StepError {
  * @description Makes an HTTP request to the tool endpoint.
  * Handles x402 payment flows when required.
  */
-/* eslint-disable @typescript-eslint/no-unused-vars */
+ 
 async function executeToolCall(
   _db: Db,
   step: RunStepDocument,
   _run: RunDocument,
   _workerId: string
 ): Promise<StepExecutionResult> {
-  /* eslint-enable @typescript-eslint/no-unused-vars */
+   
   const startTime = Date.now();
 
   // For now, simulate tool call execution
@@ -117,14 +117,14 @@ async function executeToolCall(
  *
  * @description Calls the LLM for analysis, summarization, or decision-making.
  */
-/* eslint-disable @typescript-eslint/no-unused-vars */
+ 
 async function executeLLMReason(
   _db: Db,
   step: RunStepDocument,
   run: RunDocument,
   _workerId: string
 ): Promise<StepExecutionResult> {
-  /* eslint-enable @typescript-eslint/no-unused-vars */
+   
   const startTime = Date.now();
 
   try {
@@ -190,14 +190,14 @@ async function executeLLMReason(
  *
  * @description Blocks execution until user approval.
  */
-/* eslint-disable @typescript-eslint/no-unused-vars */
+ 
 async function executeApproval(
   _db: Db,
   _step: RunStepDocument,
   _run: RunDocument,
   _workerId: string
 ): Promise<StepExecutionResult> {
-  /* eslint-enable @typescript-eslint/no-unused-vars */
+   
   // Mark as blocked and wait for user action
   return {
     status: "blocked",
@@ -213,14 +213,14 @@ async function executeApproval(
  *
  * @description Polls a status endpoint until completion.
  */
-/* eslint-disable @typescript-eslint/no-unused-vars */
+ 
 async function executeWait(
   _db: Db,
   _step: RunStepDocument,
   _run: RunDocument,
   _workerId: string
 ): Promise<StepExecutionResult> {
-  /* eslint-enable @typescript-eslint/no-unused-vars */
+   
   // For MVP, simulate wait completion
   await new Promise((resolve) => setTimeout(resolve, 1000));
 
@@ -238,14 +238,14 @@ async function executeWait(
  *
  * @description Collects outputs from multiple branches.
  */
-/* eslint-disable @typescript-eslint/no-unused-vars */
+ 
 async function executeMerge(
   _db: Db,
   step: RunStepDocument,
   _run: RunDocument,
   _workerId: string
 ): Promise<StepExecutionResult> {
-  /* eslint-enable @typescript-eslint/no-unused-vars */
+   
   // Collect inputs from all upstream steps
   const inputs = step.inputs || {};
 
@@ -267,14 +267,14 @@ async function executeMerge(
  *
  * @description Produces the final output of the workflow.
  */
-/* eslint-disable @typescript-eslint/no-unused-vars */
+ 
 async function executeFinalize(
   _db: Db,
   step: RunStepDocument,
   run: RunDocument,
   _workerId: string
 ): Promise<StepExecutionResult> {
-  /* eslint-enable @typescript-eslint/no-unused-vars */
+   
   const node = run.graph.nodes.find((n) => n.id === step.stepId);
   const outputTemplate = (node as { outputTemplate?: string })?.outputTemplate;
   const inputs = step.inputs || {};

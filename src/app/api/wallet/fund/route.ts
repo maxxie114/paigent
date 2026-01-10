@@ -17,7 +17,7 @@ import { isCdpConfigured } from "@/lib/cdp/client";
  * @description Requests test ETH and USDC from the Coinbase faucet.
  * Rate limited by the faucet service.
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+ 
 export async function POST(_req: NextRequest): Promise<NextResponse> {
   try {
     // Authenticate

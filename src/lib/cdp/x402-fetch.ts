@@ -1,16 +1,26 @@
 /**
  * x402 Payment Fetch Wrapper
  *
- * @description Wraps fetch to handle x402 Payment Required responses.
- * Uses CDP Server Wallet for signing EIP-3009 payments.
+ * @description Wraps fetch to handle x402 Payment Required responses using the
+ * official @x402/fetch package. Uses CDP Server Wallet for signing EIP-3009 payments.
  *
+ * The x402 protocol enables HTTP-native payments where:
+ * 1. Client makes initial request
+ * 2. Server responds with 402 Payment Required + PAYMENT-REQUIRED header
+ * 3. Client signs payment using wallet
+ * 4. Client retries with PAYMENT-SIGNATURE header
+ * 5. Server verifies via facilitator, settles, returns resource + PAYMENT-RESPONSE
+ *
+ * @see https://github.com/coinbase/x402
+ * @see https://docs.cdp.coinbase.com/x402/welcome
  * @see paigent-studio-spec.md Section 9
- * @see https://docs.cdp.coinbase.com/server-wallets/v2/api-reference/sign-x402-payment
  */
 
 import { ObjectId } from "mongodb";
-import { getCdpClient } from "./client";
-import { getOrCreateAgentWallet, checkSufficientBalance } from "./wallet";
+import { wrapFetchWithPayment } from "@x402/fetch";
+import { x402Client, x402HTTPClient } from "@x402/core/client";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
+import { getOrCreateAgentWallet, checkSufficientBalance, getViemCompatibleAccount } from "./wallet";
 import { recordPaymentReceipt } from "@/lib/db/queries/budgets";
 import { appendRunEvent } from "@/lib/db/queries/events";
 import { validateUrl } from "@/lib/ssrf/validator";
@@ -19,7 +29,7 @@ import { validateUrl } from "@/lib/ssrf/validator";
  * x402 canonical headers as specified by Coinbase.
  * DO NOT invent or modify these.
  *
- * @see paigent-studio-spec.md Appendix A.3
+ * @see https://github.com/coinbase/x402/blob/main/docs/core-concepts/http-402.md
  */
 const X402_HEADERS = {
   /** Server returns this header with payment requirements. */
@@ -31,19 +41,79 @@ const X402_HEADERS = {
 } as const;
 
 /**
+ * Cached x402 client and fetch wrapper.
+ */
+let cachedClient: x402Client | undefined;
+let cachedFetchWithPayment: typeof fetch | undefined;
+
+/**
+ * Get or create the x402 client with CDP Server Wallet signer.
+ *
+ * @description Creates an x402Client configured with the CDP Server Wallet
+ * for signing EVM payments. The client handles:
+ * - Detecting 402 Payment Required responses
+ * - Parsing PAYMENT-REQUIRED headers
+ * - Signing EIP-3009 transfer authorizations
+ * - Constructing PAYMENT-SIGNATURE headers
+ *
+ * @returns Object containing the x402Client and wrapped fetch function.
+ *
+ * @example
+ * ```typescript
+ * const { client, fetchWithPayment } = await getX402Client();
+ * const response = await fetchWithPayment("https://api.example.com/paid-endpoint");
+ * ```
+ */
+export async function getX402Client(): Promise<{
+  client: x402Client;
+  fetchWithPayment: typeof fetch;
+  httpClient: x402HTTPClient;
+}> {
+  if (cachedClient && cachedFetchWithPayment) {
+    return {
+      client: cachedClient,
+      fetchWithPayment: cachedFetchWithPayment,
+      httpClient: new x402HTTPClient(cachedClient),
+    };
+  }
+
+  // Get the viem-compatible signer from CDP Server Wallet
+  const signer = await getViemCompatibleAccount();
+
+  // Create x402 client and register the EVM exact scheme
+  const client = new x402Client();
+  registerExactEvmScheme(client, { signer });
+
+  // Wrap fetch with automatic payment handling
+  const fetchWithPayment = wrapFetchWithPayment(fetch, client);
+
+  // Cache for reuse
+  cachedClient = client;
+  cachedFetchWithPayment = fetchWithPayment;
+
+  return {
+    client,
+    fetchWithPayment,
+    httpClient: new x402HTTPClient(client),
+  };
+}
+
+/**
  * Payment requirement parsed from PAYMENT-REQUIRED header.
  */
 export type PaymentRequirement = {
   /** Amount in atomic units. */
   amountAtomic: string;
-  /** Network in CAIP-2 format. */
+  /** Network in CAIP-2 format (e.g., "eip155:84532" for Base Sepolia). */
   network: string;
-  /** Asset address. */
+  /** Asset identifier (e.g., "USDC" or contract address). */
   asset: string;
   /** Recipient address. */
   recipient: string;
   /** Payment deadline (Unix timestamp). */
   deadline?: number;
+  /** Scheme type (e.g., "exact"). */
+  scheme?: string;
   /** Raw header value for signing. */
   rawHeader: string;
 };
@@ -76,8 +146,11 @@ export type X402FetchResult = {
   paid: boolean;
   /** Payment receipt (if paid). */
   receipt?: {
+    /** Receipt ID from database. */
     id: string;
+    /** Amount paid in atomic units. */
     amountAtomic: string;
+    /** Transaction hash (if available). */
     txHash?: string;
   };
 };
@@ -85,33 +158,48 @@ export type X402FetchResult = {
 /**
  * Parse the PAYMENT-REQUIRED header.
  *
- * @param headerValue - The raw header value.
+ * @description Parses the Base64-encoded JSON payment requirements from the
+ * PAYMENT-REQUIRED header. The header contains information about:
+ * - Amount to pay
+ * - Network (CAIP-2 format)
+ * - Asset/token
+ * - Recipient address
+ * - Deadline
+ *
+ * @param headerValue - The raw header value (Base64-encoded JSON).
  * @returns Parsed payment requirement.
  */
 function parsePaymentRequirement(headerValue: string): PaymentRequirement {
-  // The header is typically Base64-encoded JSON
+  // The header is Base64-encoded JSON per x402 spec
   try {
     const decoded = Buffer.from(headerValue, "base64").toString("utf-8");
     const parsed = JSON.parse(decoded);
 
+    // Handle both array format (accepts multiple requirements) and single object
+    const requirement = Array.isArray(parsed) ? parsed[0] : parsed;
+
     return {
-      amountAtomic: parsed.amount?.toString() || "0",
-      network: parsed.network || "eip155:84532",
-      asset: parsed.asset || "USDC",
-      recipient: parsed.recipient || "",
-      deadline: parsed.deadline,
+      amountAtomic: requirement.amount?.toString() || requirement.maxAmountRequired?.toString() || "0",
+      network: requirement.network || requirement.networkId || "eip155:84532",
+      asset: requirement.asset || requirement.resource || "USDC",
+      recipient: requirement.recipient || requirement.payTo || "",
+      deadline: requirement.deadline || requirement.validUntil,
+      scheme: requirement.scheme || "exact",
       rawHeader: headerValue,
     };
   } catch {
-    // If not Base64 JSON, try plain JSON
+    // If not Base64, try plain JSON
     try {
       const parsed = JSON.parse(headerValue);
+      const requirement = Array.isArray(parsed) ? parsed[0] : parsed;
+
       return {
-        amountAtomic: parsed.amount?.toString() || "0",
-        network: parsed.network || "eip155:84532",
-        asset: parsed.asset || "USDC",
-        recipient: parsed.recipient || "",
-        deadline: parsed.deadline,
+        amountAtomic: requirement.amount?.toString() || "0",
+        network: requirement.network || "eip155:84532",
+        asset: requirement.asset || "USDC",
+        recipient: requirement.recipient || "",
+        deadline: requirement.deadline,
+        scheme: requirement.scheme || "exact",
         rawHeader: headerValue,
       };
     } catch {
@@ -121,6 +209,7 @@ function parsePaymentRequirement(headerValue: string): PaymentRequirement {
         network: "eip155:84532",
         asset: "USDC",
         recipient: "",
+        scheme: "exact",
         rawHeader: headerValue,
       };
     }
@@ -131,12 +220,26 @@ function parsePaymentRequirement(headerValue: string): PaymentRequirement {
  * Make a fetch request with x402 payment handling.
  *
  * @description Performs an HTTP request and handles 402 Payment Required responses
- * by signing and submitting payments using the CDP Server Wallet.
+ * using the official @x402/fetch package with CDP Server Wallet.
+ *
+ * The flow follows the x402 protocol:
+ * 1. Initial request to the resource server
+ * 2. If 402 received, parse PAYMENT-REQUIRED header
+ * 3. Validate budget and check wallet balance
+ * 4. Sign payment using CDP Server Wallet (EIP-3009)
+ * 5. Retry request with PAYMENT-SIGNATURE header
+ * 6. Parse PAYMENT-RESPONSE header for settlement confirmation
+ * 7. Record payment receipt in database
  *
  * @param url - The URL to fetch.
  * @param init - Fetch init options.
- * @param options - x402 options.
- * @returns The fetch result with payment information.
+ * @param options - x402 options including budget limits and logging context.
+ * @returns The fetch result with response data and payment information.
+ *
+ * @throws {Error} If SSRF validation fails.
+ * @throws {Error} If payment exceeds budget.
+ * @throws {Error} If wallet has insufficient balance.
+ * @throws {Error} If payment is rejected by the server.
  *
  * @example
  * ```typescript
@@ -144,13 +247,19 @@ function parsePaymentRequirement(headerValue: string): PaymentRequirement {
  *   "https://api.example.com/paid-endpoint",
  *   { method: "POST", body: JSON.stringify({ query: "test" }) },
  *   {
- *     maxPaymentAtomic: "1000000", // 1 USDC
+ *     maxPaymentAtomic: "1000000", // 1 USDC (6 decimals)
  *     runId: new ObjectId(),
  *     stepId: "tool_call_1",
  *     workspaceId: new ObjectId(),
  *   }
  * );
+ *
+ * if (result.paid) {
+ *   console.log("Payment made:", result.receipt);
+ * }
  * ```
+ *
+ * @see https://github.com/coinbase/x402/blob/main/docs/getting-started/quickstart-for-buyers.md
  */
 export async function x402Fetch(
   url: string,
@@ -166,13 +275,13 @@ export async function x402Fetch(
     allowlist = [],
   } = options;
 
-  // Validate URL for SSRF
+  // Validate URL for SSRF protection
   const urlValidation = await validateUrl(url, allowlist);
   if (!urlValidation.valid) {
     throw new Error(`SSRF validation failed: ${urlValidation.error}`);
   }
 
-  // First attempt without payment
+  // First attempt without payment to check if payment is required
   const initialResponse = await fetch(url, {
     ...init,
     redirect: "error", // SSRF protection: no redirects
@@ -211,38 +320,35 @@ export async function x402Fetch(
       amountAtomic: requirement.amountAtomic,
       asset: requirement.asset,
       network: requirement.network,
+      scheme: requirement.scheme,
+      recipient: requirement.recipient,
     },
     actor: { type: "system", id: "x402-fetch" },
   });
 
-  // Check budget
+  // Check budget limit
   if (BigInt(requirement.amountAtomic) > BigInt(maxPaymentAtomic)) {
     throw new Error(
-      `Payment ${requirement.amountAtomic} exceeds maximum allowed ${maxPaymentAtomic}`
+      `Payment ${requirement.amountAtomic} atomic units exceeds maximum allowed ${maxPaymentAtomic}`
     );
   }
 
-  // Get wallet and check balance
+  // Get wallet and verify sufficient balance
   const wallet = await getOrCreateAgentWallet();
   const balanceCheck = await checkSufficientBalance(wallet.address, requirement.amountAtomic);
 
   if (!balanceCheck.sufficient) {
     throw new Error(
-      `Insufficient balance. Required: ${requirement.amountAtomic}, ` +
-        `Available: ${balanceCheck.currentBalanceAtomic}, ` +
-        `Shortfall: ${balanceCheck.shortfallAtomic}`
+      `Insufficient wallet balance. Required: ${requirement.amountAtomic} atomic, ` +
+        `Available: ${balanceCheck.currentBalanceAtomic} atomic, ` +
+        `Shortfall: ${balanceCheck.shortfallAtomic} atomic`
     );
   }
 
-  // Sign the payment using CDP
-  const cdp = getCdpClient();
+  // Get the x402 client with payment handling
+  const { fetchWithPayment, httpClient } = await getX402Client();
 
-  const signResult = await cdp.evm.signX402Payment({
-    address: wallet.address,
-    paymentRequired: paymentRequiredHeader,
-  });
-
-  // Log payment sent event
+  // Log payment initiation
   await appendRunEvent({
     workspaceId,
     runId,
@@ -251,37 +357,55 @@ export async function x402Fetch(
       stepId,
       amountAtomic: requirement.amountAtomic,
       walletAddress: wallet.address,
+      network: requirement.network,
     },
     actor: { type: "system", id: "x402-fetch" },
   });
 
-  // Retry request with payment signature
-  const paidResponse = await fetch(url, {
+  // Make request with automatic payment handling via @x402/fetch
+  // The wrapper will:
+  // 1. Detect the 402 response
+  // 2. Parse payment requirements
+  // 3. Sign using registered EVM scheme
+  // 4. Retry with PAYMENT-SIGNATURE header
+  const paidResponse = await fetchWithPayment(url, {
     ...init,
-    headers: {
-      ...init.headers,
-      [X402_HEADERS.PAYMENT_SIGNATURE]: signResult.paymentSignature,
-    },
     redirect: "error",
   });
 
-  // Get payment response header
+  // Get settlement response from PAYMENT-RESPONSE header
   const paymentResponseHeader = paidResponse.headers.get(X402_HEADERS.PAYMENT_RESPONSE);
 
-  // Parse transaction hash from payment response if available
+  // Parse transaction hash from settlement response
   let txHash: string | undefined;
   if (paymentResponseHeader) {
     try {
-      const responseData = JSON.parse(
-        Buffer.from(paymentResponseHeader, "base64").toString("utf-8")
+      const settlementResponse = httpClient.getPaymentSettleResponse(
+        (name) => paidResponse.headers.get(name)
       );
-      txHash = responseData.txHash;
+      // The SettleResponse may have transaction info in the 'transaction' field
+      // or as a direct property depending on the scheme
+      const txData = settlementResponse?.transaction;
+      if (txData && typeof txData === "object" && "hash" in txData) {
+        txHash = (txData as { hash?: string }).hash;
+      }
     } catch {
-      // Ignore parse errors
+      // Try manual parsing if httpClient fails
+      try {
+        const responseData = JSON.parse(
+          Buffer.from(paymentResponseHeader, "base64").toString("utf-8")
+        );
+        txHash = responseData.txHash || responseData.transactionHash || responseData.transaction?.hash;
+      } catch {
+        // Ignore parse errors - txHash will remain undefined
+      }
     }
   }
 
-  // Record payment receipt
+  // Determine if payment was actually made
+  const paymentMade = paidResponse.ok && paymentResponseHeader !== null;
+
+  // Record payment receipt in database
   const receipt = await recordPaymentReceipt({
     workspaceId,
     runId,
@@ -290,14 +414,14 @@ export async function x402Fetch(
     network: requirement.network,
     asset: requirement.asset,
     amountAtomic: requirement.amountAtomic,
-    paymentRequiredHeaderB64: Buffer.from(paymentRequiredHeader).toString("base64"),
-    paymentSignatureHeaderB64: Buffer.from(signResult.paymentSignature).toString("base64"),
+    paymentRequiredHeaderB64: paymentRequiredHeader,
+    paymentSignatureHeaderB64: paidResponse.headers.get(X402_HEADERS.PAYMENT_SIGNATURE) || "",
     paymentResponseHeader: paymentResponseHeader || undefined,
     txHash,
     status: paidResponse.ok ? "settled" : "rejected",
   });
 
-  // Log payment result
+  // Log payment result event
   await appendRunEvent({
     workspaceId,
     runId,
@@ -307,22 +431,56 @@ export async function x402Fetch(
       receiptId: receipt._id.toString(),
       amountAtomic: requirement.amountAtomic,
       txHash,
+      status: paidResponse.ok ? "settled" : "rejected",
     },
     actor: { type: "system", id: "x402-fetch" },
   });
 
+  // Handle payment failure
   if (!paidResponse.ok) {
     const errorText = await paidResponse.text();
-    throw new Error(`Payment failed: ${paidResponse.status} - ${errorText}`);
+    throw new Error(`Payment request failed: ${paidResponse.status} - ${errorText}`);
   }
 
   return {
     response: await paidResponse.json(),
-    paid: true,
-    receipt: {
-      id: receipt._id.toString(),
-      amountAtomic: requirement.amountAtomic,
-      txHash,
-    },
+    paid: paymentMade,
+    receipt: paymentMade
+      ? {
+          id: receipt._id.toString(),
+          amountAtomic: requirement.amountAtomic,
+          txHash,
+        }
+      : undefined,
+  };
+}
+
+/**
+ * Create a pre-configured x402 fetch function for repeated use.
+ *
+ * @description Creates a fetch function with x402 payment handling that can be
+ * reused across multiple requests with the same configuration.
+ *
+ * @param options - Default options for all requests.
+ * @returns A fetch function that handles x402 payments.
+ *
+ * @example
+ * ```typescript
+ * const paidFetch = await createX402Fetch({
+ *   maxPaymentAtomic: "5000000", // 5 USDC max per request
+ *   runId: myRunId,
+ *   stepId: "batch_calls",
+ *   workspaceId: myWorkspaceId,
+ * });
+ *
+ * const result1 = await paidFetch("https://api1.example.com/data");
+ * const result2 = await paidFetch("https://api2.example.com/data");
+ * ```
+ */
+export async function createX402Fetch(
+  options: Omit<X402FetchOptions, "allowlist">
+): Promise<(url: string, init?: RequestInit, allowlist?: string[]) => Promise<X402FetchResult>> {
+  return async (url: string, init: RequestInit = {}, allowlist: string[] = []) => {
+    return x402Fetch(url, init, { ...options, allowlist });
   };
 }
