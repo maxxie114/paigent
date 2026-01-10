@@ -1,0 +1,278 @@
+/**
+ * Fireworks AI Client
+ *
+ * @description OpenAI-compatible client for Fireworks AI API.
+ * Used for GLM-4.7 Thinking model and other LLM operations.
+ *
+ * @see https://fireworks.ai/docs/tools-sdks/openai-compatibility
+ * @see https://fireworks.ai/docs/guides/querying-text-models
+ */
+
+import OpenAI from "openai";
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+
+/**
+ * Fireworks AI configuration.
+ */
+const FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1";
+
+/**
+ * Available Fireworks models.
+ */
+export const FIREWORKS_MODELS = {
+  /** GLM-4 9B - Fast, efficient model for general tasks. */
+  GLM_4_9B: "accounts/fireworks/models/glm-4-9b-chat",
+  /** GLM-4 32B - More capable model for complex reasoning. */
+  GLM_4_32B: "accounts/fireworks/models/glm-4-32b-chat",
+  /** Llama 3.3 70B - High-quality open model. */
+  LLAMA_3_70B: "accounts/fireworks/models/llama-v3p3-70b-instruct",
+  /** Mixtral 8x22B - Large mixture-of-experts model. */
+  MIXTRAL_8X22B: "accounts/fireworks/models/mixtral-8x22b-instruct",
+} as const;
+
+/**
+ * Default model for planning and reasoning tasks.
+ */
+export const DEFAULT_MODEL = FIREWORKS_MODELS.GLM_4_9B;
+
+/**
+ * Cached OpenAI client instance.
+ */
+let cachedClient: OpenAI | undefined;
+
+/**
+ * Get or create the Fireworks AI client.
+ *
+ * @description Creates a singleton OpenAI-compatible client configured for Fireworks AI.
+ *
+ * @returns The OpenAI client configured for Fireworks.
+ * @throws {Error} If FIREWORKS_API_KEY is not set.
+ */
+export function getFireworksClient(): OpenAI {
+  if (cachedClient) {
+    return cachedClient;
+  }
+
+  const apiKey = process.env.FIREWORKS_API_KEY;
+
+  if (!apiKey) {
+    throw new Error(
+      "FIREWORKS_API_KEY environment variable is not set. " +
+        "Get your API key from https://fireworks.ai/account/api-keys"
+    );
+  }
+
+  cachedClient = new OpenAI({
+    apiKey,
+    baseURL: FIREWORKS_BASE_URL,
+  });
+
+  return cachedClient;
+}
+
+/**
+ * Parameters for LLM calls.
+ */
+export type LLMCallParams = {
+  /** System prompt for context and instructions. */
+  systemPrompt: string;
+  /** User prompt with the actual query. */
+  userPrompt: string;
+  /** Model to use (defaults to GLM-4 9B). */
+  model?: string;
+  /** Maximum tokens in response. */
+  maxTokens?: number;
+  /** Temperature for randomness (0-2). */
+  temperature?: number;
+  /** Additional messages for multi-turn conversations. */
+  additionalMessages?: ChatCompletionMessageParam[];
+};
+
+/**
+ * LLM call response.
+ */
+export type LLMCallResponse = {
+  /** The generated text response. */
+  text: string;
+  /** Token usage information. */
+  usage: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+  /** Finish reason. */
+  finishReason: string | undefined;
+  /** Model used. */
+  model: string;
+  /** Latency in milliseconds. */
+  latencyMs: number;
+};
+
+/**
+ * Call the Fireworks LLM.
+ *
+ * @description Makes a chat completion request to Fireworks AI.
+ * Uses GLM-4 by default for best reasoning performance.
+ *
+ * @param params - The call parameters.
+ * @returns The LLM response with text and metadata.
+ *
+ * @example
+ * ```typescript
+ * const response = await callLLM({
+ *   systemPrompt: "You are a helpful assistant.",
+ *   userPrompt: "What is 2 + 2?",
+ * });
+ * console.log(response.text); // "4"
+ * ```
+ */
+export async function callLLM(params: LLMCallParams): Promise<LLMCallResponse> {
+  const {
+    systemPrompt,
+    userPrompt,
+    model = DEFAULT_MODEL,
+    maxTokens = 4096,
+    temperature = 0.7,
+    additionalMessages = [],
+  } = params;
+
+  const client = getFireworksClient();
+  const startTime = Date.now();
+
+  const messages: ChatCompletionMessageParam[] = [
+    { role: "system", content: systemPrompt },
+    ...additionalMessages,
+    { role: "user", content: userPrompt },
+  ];
+
+  const response = await client.chat.completions.create({
+    model,
+    messages,
+    max_tokens: maxTokens,
+    temperature,
+  });
+
+  const latencyMs = Date.now() - startTime;
+  const choice = response.choices[0];
+
+  return {
+    text: choice?.message?.content ?? "",
+    usage: {
+      promptTokens: response.usage?.prompt_tokens ?? 0,
+      completionTokens: response.usage?.completion_tokens ?? 0,
+      totalTokens: response.usage?.total_tokens ?? 0,
+    },
+    finishReason: choice?.finish_reason ?? undefined,
+    model: response.model,
+    latencyMs,
+  };
+}
+
+/**
+ * Call LLM with retry logic.
+ *
+ * @description Wraps callLLM with exponential backoff retry for transient failures.
+ *
+ * @param params - The call parameters.
+ * @param maxRetries - Maximum number of retries (default: 3).
+ * @returns The LLM response.
+ * @throws {Error} After all retries are exhausted.
+ */
+export async function callLLMWithRetry(
+  params: LLMCallParams,
+  maxRetries: number = 3
+): Promise<LLMCallResponse> {
+  let lastError: Error | undefined;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await callLLM(params);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+
+      // Don't retry on client errors (4xx)
+      if (
+        error instanceof OpenAI.APIError &&
+        error.status >= 400 &&
+        error.status < 500
+      ) {
+        throw error;
+      }
+
+      // Exponential backoff
+      const backoffMs = Math.min(1000 * Math.pow(2, attempt), 10000);
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
+  }
+
+  throw lastError ?? new Error("LLM call failed after retries");
+}
+
+/**
+ * Stream LLM response.
+ *
+ * @description Streams the LLM response token by token for real-time display.
+ *
+ * @param params - The call parameters.
+ * @param onToken - Callback for each token received.
+ * @returns The complete response after streaming finishes.
+ */
+export async function streamLLM(
+  params: LLMCallParams,
+  onToken: (token: string) => void
+): Promise<LLMCallResponse> {
+  const {
+    systemPrompt,
+    userPrompt,
+    model = DEFAULT_MODEL,
+    maxTokens = 4096,
+    temperature = 0.7,
+    additionalMessages = [],
+  } = params;
+
+  const client = getFireworksClient();
+  const startTime = Date.now();
+
+  const messages: ChatCompletionMessageParam[] = [
+    { role: "system", content: systemPrompt },
+    ...additionalMessages,
+    { role: "user", content: userPrompt },
+  ];
+
+  const stream = await client.chat.completions.create({
+    model,
+    messages,
+    max_tokens: maxTokens,
+    temperature,
+    stream: true,
+  });
+
+  let fullText = "";
+  let finishReason: string | undefined;
+
+  for await (const chunk of stream) {
+    const content = chunk.choices[0]?.delta?.content;
+    if (content) {
+      fullText += content;
+      onToken(content);
+    }
+    if (chunk.choices[0]?.finish_reason) {
+      finishReason = chunk.choices[0].finish_reason;
+    }
+  }
+
+  const latencyMs = Date.now() - startTime;
+
+  return {
+    text: fullText,
+    usage: {
+      // Token counts not available in streaming mode
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+    },
+    finishReason,
+    model,
+    latencyMs,
+  };
+}
