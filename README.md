@@ -4,8 +4,8 @@
 
 Paigent Studio is a workflow IDE that enables you to design and execute multi-agent workflows with automatic micropayments. Describe what you want to accomplish using voice or text, and our AI planner creates an optimal execution graph that pays for premium tools on-demand using USDC.
 
-![Next.js](https://img.shields.io/badge/Next.js-15-black?style=flat-square&logo=next.js)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue?style=flat-square&logo=typescript)
+![Next.js](https://img.shields.io/badge/Next.js-16-black?style=flat-square&logo=next.js)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?style=flat-square&logo=typescript)
 ![MongoDB](https://img.shields.io/badge/MongoDB-Atlas-green?style=flat-square&logo=mongodb)
 ![Coinbase](https://img.shields.io/badge/Coinbase-CDP-0052FF?style=flat-square&logo=coinbase)
 
