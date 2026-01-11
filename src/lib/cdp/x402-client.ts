@@ -137,31 +137,53 @@ export function clearX402ClientCache(): void {
 }
 
 /**
- * x402 protocol headers.
+ * x402 protocol headers (v2 - canonical).
  *
- * @description Standard headers used in the x402 protocol.
- * These headers are Base64-encoded JSON.
+ * @description Standard headers used in the x402 v2 protocol.
+ * These headers contain Base64-encoded JSON.
  *
  * @see https://github.com/coinbase/x402/blob/main/docs/core-concepts/http-402.md
  */
 export const X402_HEADERS = {
   /**
-   * PAYMENT-REQUIRED header.
+   * PAYMENT-REQUIRED header (v2).
    * Sent by server in 402 response with payment requirements.
    */
   PAYMENT_REQUIRED: "PAYMENT-REQUIRED",
 
   /**
-   * PAYMENT-SIGNATURE header.
+   * PAYMENT-SIGNATURE header (v2).
    * Sent by client with signed payment payload.
    */
   PAYMENT_SIGNATURE: "PAYMENT-SIGNATURE",
 
   /**
-   * PAYMENT-RESPONSE header.
+   * PAYMENT-RESPONSE header (v2).
    * Sent by server with settlement confirmation.
    */
   PAYMENT_RESPONSE: "PAYMENT-RESPONSE",
+} as const;
+
+/**
+ * x402 protocol headers (v1 - legacy).
+ *
+ * @description Headers used in the x402 v1 protocol (legacy providers).
+ * In v1, payment requirements are in the JSON response body instead of headers.
+ *
+ * @see @x402/core README.md
+ */
+export const X402_HEADERS_V1 = {
+  /**
+   * X-PAYMENT header (v1).
+   * Sent by client with signed payment payload in v1 protocol.
+   */
+  X_PAYMENT: "X-PAYMENT",
+
+  /**
+   * X-PAYMENT-RESPONSE header (v1).
+   * Sent by server with settlement confirmation in v1 protocol.
+   */
+  X_PAYMENT_RESPONSE: "X-PAYMENT-RESPONSE",
 } as const;
 
 /**
@@ -194,7 +216,92 @@ export const USDC_ADDRESSES = {
   BASE_MAINNET: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
   /** USDC on Base Sepolia (testnet). */
   BASE_SEPOLIA: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  /** USDC on Ethereum Mainnet. */
+  ETHEREUM_MAINNET: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
 } as const;
+
+/**
+ * USDC addresses indexed by CAIP-2 network identifier.
+ *
+ * @description Maps CAIP-2 network IDs to USDC contract addresses.
+ * Use this for dynamic network selection.
+ */
+export const USDC_BY_NETWORK: Record<string, string> = {
+  "eip155:8453": USDC_ADDRESSES.BASE_MAINNET,
+  "eip155:84532": USDC_ADDRESSES.BASE_SEPOLIA,
+  "eip155:1": USDC_ADDRESSES.ETHEREUM_MAINNET,
+};
+
+/**
+ * Network name to CAIP-2 identifier mapping.
+ *
+ * @description Maps shorthand network names to CAIP-2 identifiers.
+ * Some x402 providers use shorthand names like "base" instead of "eip155:8453".
+ */
+export const NETWORK_NAME_TO_CAIP2: Record<string, string> = {
+  // Base networks
+  base: SUPPORTED_NETWORKS.BASE_MAINNET,
+  "base-mainnet": SUPPORTED_NETWORKS.BASE_MAINNET,
+  "base-sepolia": SUPPORTED_NETWORKS.BASE_SEPOLIA,
+  // Ethereum networks
+  ethereum: "eip155:1",
+  mainnet: "eip155:1",
+  sepolia: "eip155:11155111",
+  // Solana networks
+  solana: SUPPORTED_NETWORKS.SOLANA_MAINNET,
+  "solana-mainnet": SUPPORTED_NETWORKS.SOLANA_MAINNET,
+  "solana-devnet": SUPPORTED_NETWORKS.SOLANA_DEVNET,
+};
+
+/**
+ * Normalize a network identifier to CAIP-2 format.
+ *
+ * @description Converts shorthand network names (e.g., "base") to their
+ * standard CAIP-2 identifiers (e.g., "eip155:8453").
+ *
+ * @param networkRaw - Raw network identifier from provider.
+ * @returns CAIP-2 formatted network identifier.
+ *
+ * @example
+ * ```typescript
+ * normalizeNetworkToCaip2("base"); // Returns "eip155:8453"
+ * normalizeNetworkToCaip2("eip155:84532"); // Returns "eip155:84532"
+ * ```
+ */
+export function normalizeNetworkToCaip2(networkRaw: string): string {
+  if (!networkRaw) {
+    return SUPPORTED_NETWORKS.BASE_SEPOLIA; // Default
+  }
+
+  // Already in CAIP-2 format
+  if (networkRaw.includes(":")) {
+    return networkRaw;
+  }
+
+  // Look up in mapping
+  const normalized = NETWORK_NAME_TO_CAIP2[networkRaw.toLowerCase()];
+  return normalized ?? networkRaw;
+}
+
+/**
+ * Get USDC address for a network.
+ *
+ * @param network - CAIP-2 network identifier.
+ * @returns USDC contract address or undefined if not supported.
+ */
+export function getUsdcAddressForNetwork(network: string): string | undefined {
+  return USDC_BY_NETWORK[network];
+}
+
+/**
+ * Check if a network is supported for x402 payments.
+ *
+ * @param network - CAIP-2 network identifier.
+ * @returns True if the network is supported.
+ */
+export function isNetworkSupportedForX402(network: string): boolean {
+  return network in USDC_BY_NETWORK;
+}
 
 /**
  * CDP Facilitator endpoints.
