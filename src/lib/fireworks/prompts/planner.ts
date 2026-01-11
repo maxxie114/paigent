@@ -42,11 +42,13 @@ You MUST output ONLY valid JSON matching this schema:
 
 ### tool_call
 Call an external API endpoint. May require x402 payment.
-Additional fields:
-- toolId: Tool identifier (if known)
+Additional fields (REQUIRED):
+- toolId: **REQUIRED** - The tool's MongoDB ObjectId from the available tools list (e.g., "507f1f77bcf86cd799439011"). You MUST always include this field.
 - endpoint: { path: "/api/...", method: "GET|POST|..." }
 - requestTemplate: JSON template with {{variable}} placeholders
 - payment: { allowed: boolean, maxAtomic: "amount" }
+
+**IMPORTANT**: Every tool_call node MUST include a valid toolId from the available tools. Without toolId, the executor cannot identify which tool to call and the workflow will fail.
 
 ### llm_reason
 Use an LLM for analysis, summarization, critique, or decision making.
@@ -93,23 +95,25 @@ Additional fields:
 1. Create a directed acyclic graph (DAG) - no cycles allowed
 2. Every node must be reachable from the entry node
 3. Use tool_call nodes for external API operations
-4. Use llm_reason nodes for analysis and decision-making
-5. Insert approval nodes before costly (>$1) or irreversible actions
-6. Connect nodes with appropriate edge types:
+4. **CRITICAL**: Every tool_call node MUST include a valid "toolId" field with the tool's MongoDB ObjectId from the available tools list. The workflow will FAIL without this.
+5. Use llm_reason nodes for analysis and decision-making
+6. Insert approval nodes before costly (>$1) or irreversible actions
+7. Connect nodes with appropriate edge types:
    - "success": Follow when node succeeds
    - "failure": Follow when node fails (for error handling)
    - "conditional": Follow based on condition evaluation
-7. Ensure the graph has exactly one entry point
-8. End with a finalize node for the final output
-9. Be conservative with tool calls - only use what's necessary
-10. Consider the user's budget constraints
+8. Ensure the graph has exactly one entry point
+9. End with a finalize node for the final output
+10. Be conservative with tool calls - only use what's necessary
+11. Consider the user's budget constraints
+12. If no suitable tool exists for the user's request, do NOT create a tool_call node - instead use an llm_reason node to explain what tools are needed
 
 ## Available Tools
 You will be provided with a list of available tools. Only use tools from this list.
 If no suitable tool exists, use llm_reason to explain what's needed.
 
 ## Example
-For intent "Summarize the top 3 news articles about AI":
+For intent "Summarize the top 3 news articles about AI" with available tool NewsSearch (id: "507f1f77bcf86cd799439011"):
 
 {
   "nodes": [
@@ -117,8 +121,10 @@ For intent "Summarize the top 3 news articles about AI":
       "id": "search",
       "type": "tool_call",
       "label": "Search for AI news articles",
+      "toolId": "507f1f77bcf86cd799439011",
       "endpoint": { "path": "/search", "method": "POST" },
-      "requestTemplate": { "query": "AI news", "limit": 5 }
+      "requestTemplate": { "query": "AI news", "limit": 5 },
+      "payment": { "allowed": true, "maxAtomic": "1000000" }
     },
     {
       "id": "summarize",

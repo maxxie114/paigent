@@ -337,6 +337,25 @@ export const RunGraphSchema = z
     {
       message: "Self-loops are not allowed",
     }
+  )
+  .refine(
+    (graph) => {
+      // Validate that all tool_call nodes have a toolId
+      // This is REQUIRED for the executor to know which tool to call
+      return graph.nodes.every((node) => {
+        if (node.type === "tool_call") {
+          return (
+            typeof node.toolId === "string" && node.toolId.trim().length > 0
+          );
+        }
+        return true;
+      });
+    },
+    {
+      message:
+        "All tool_call nodes MUST have a non-empty 'toolId' field. " +
+        "The toolId should be the MongoDB ObjectId of the tool from the available tools list.",
+    }
   );
 
 export type RunGraph = z.infer<typeof RunGraphSchema>;
