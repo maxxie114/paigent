@@ -41,10 +41,16 @@ export const DEFAULT_RESPONSES_MODEL = RESPONSES_API_MODELS.GLM_4P7;
 
 /**
  * Content item types for structured input/output.
+ *
+ * @description The Fireworks Responses API returns different content types depending
+ * on the context:
+ * - `"text"`: Standard text content
+ * - `"input_text"`: User input text in conversation history
+ * - `"output_text"`: Assistant output text (used by GLM-4.7 and other models)
  */
 export type ContentItem = {
-  /** Content type (e.g., "text"). */
-  type: "text" | "input_text";
+  /** Content type - includes "output_text" for assistant responses. */
+  type: "text" | "input_text" | "output_text";
   /** Text content. */
   text: string;
 };
@@ -401,6 +407,11 @@ function toApiParams(params: CreateResponseParams): Record<string, unknown> {
  * Handles multiple content types including reasoning output from GLM-4.7.
  * Prioritizes non-reasoning text content for the main output.
  *
+ * The Fireworks Responses API returns different content types:
+ * - `"text"`: Standard text content
+ * - `"input_text"`: User input text in conversation history
+ * - `"output_text"`: Assistant output text (primary output type for GLM-4.7)
+ *
  * @param output - The output items array.
  * @returns Concatenated text content (excluding reasoning content).
  */
@@ -413,14 +424,20 @@ function extractTextFromOutput(output: OutputItem[]): string {
         textParts.push(item.content);
       } else if (Array.isArray(item.content)) {
         for (const contentItem of item.content) {
-          // Include text content; skip reasoning content types
+          // Include all text content types; skip reasoning content types.
           // The Fireworks API may return reasoning as separate content items
-          // with type "reasoning" or similar; we only want "text" type
-          if (contentItem.type === "text" && contentItem.text) {
-            textParts.push(contentItem.text);
-          }
-          // Also handle "input_text" type that may appear in some responses
-          if (contentItem.type === "input_text" && contentItem.text) {
+          // with type "reasoning" or similar; we only want actual text output.
+          //
+          // Content types we handle:
+          // - "text": Standard text content
+          // - "input_text": User input text
+          // - "output_text": Assistant output text (GLM-4.7 uses this)
+          if (
+            (contentItem.type === "text" ||
+              contentItem.type === "input_text" ||
+              contentItem.type === "output_text") &&
+            contentItem.text
+          ) {
             textParts.push(contentItem.text);
           }
         }

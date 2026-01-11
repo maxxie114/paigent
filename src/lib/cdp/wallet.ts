@@ -90,22 +90,40 @@ export async function getOrCreateAgentWallet(): Promise<EvmAccount> {
       name: AGENT_WALLET_NAME,
     });
 
+    // Validate the address before returning
+    if (!account?.address) {
+      throw new Error("CDP returned account without address");
+    }
+
+    console.log(`[Wallet] Got agent wallet: ${account.address}`);
+
     return {
       address: account.address,
       name: AGENT_WALLET_NAME,
     };
   } catch (error) {
     // If getOrCreate fails, try creating a new one
-    console.error("Error getting/creating wallet:", error);
+    console.error("[Wallet] Error getting/creating wallet:", error);
 
-    const account = await cdp.evm.createAccount({
-      name: `${AGENT_WALLET_NAME}-${Date.now()}`,
-    });
+    try {
+      const account = await cdp.evm.createAccount({
+        name: `${AGENT_WALLET_NAME}-${Date.now()}`,
+      });
 
-    return {
-      address: account.address,
-      name: account.name,
-    };
+      if (!account?.address) {
+        throw new Error("CDP returned new account without address");
+      }
+
+      console.log(`[Wallet] Created new agent wallet: ${account.address}`);
+
+      return {
+        address: account.address,
+        name: account.name,
+      };
+    } catch (createError) {
+      console.error("[Wallet] Failed to create new wallet:", createError);
+      throw createError;
+    }
   }
 }
 
@@ -128,34 +146,72 @@ const NATIVE_ETH_ADDRESS = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 export async function getWalletBalance(address: string): Promise<WalletBalance> {
   const cdp = getCdpClient();
 
+  // Initialize default values
+  const defaultBalance: WalletBalance = {
+    ethWei: "0",
+    eth: "0.000000",
+    usdcAtomic: "0",
+    usdc: "0.00",
+  };
+
+  // Validate address format before making API call
+  if (!address || typeof address !== "string") {
+    console.error("Invalid wallet address: address is empty or not a string");
+    return defaultBalance;
+  }
+
+  // Ensure address is in proper hex format
+  const normalizedAddress = address.startsWith("0x") ? address : `0x${address}`;
+  
+  // Basic hex address validation (40 hex chars after 0x prefix)
+  const hexAddressRegex = /^0x[a-fA-F0-9]{40}$/;
+  if (!hexAddressRegex.test(normalizedAddress)) {
+    console.error(`Invalid wallet address format: ${normalizedAddress}`);
+    return defaultBalance;
+  }
+
   try {
     // Use listTokenBalances to get all token balances (including native ETH)
     const result = await cdp.evm.listTokenBalances({
-      address: address as `0x${string}`,
+      address: normalizedAddress as `0x${string}`,
       network: BASE_SEPOLIA_NETWORK,
     });
 
-    // Initialize default values
+    // Initialize mutable values
     let ethWei = "0";
     let eth = "0.000000";
     let usdcAtomic = "0";
     let usdc = "0.00";
 
-    // Parse balances from result
-    for (const item of result.balances) {
-      const contractAddress = item.token.contractAddress.toLowerCase();
-      const amount = item.amount.amount;
-      const decimals = item.amount.decimals;
+    // Safely check if result and balances exist and are iterable
+    if (result && result.balances && Array.isArray(result.balances)) {
+      // Parse balances from result
+      for (const item of result.balances) {
+        // Safely access nested properties
+        if (!item?.token?.contractAddress || !item?.amount) {
+          continue;
+        }
 
-      if (contractAddress === NATIVE_ETH_ADDRESS.toLowerCase()) {
-        // Native ETH balance
-        ethWei = String(amount);
-        eth = (Number(amount) / Math.pow(10, decimals)).toFixed(6);
-      } else if (contractAddress === USDC_BASE_SEPOLIA.toLowerCase()) {
-        // USDC balance
-        usdcAtomic = String(amount);
-        usdc = (Number(amount) / Math.pow(10, decimals)).toFixed(2);
+        const contractAddress = item.token.contractAddress.toLowerCase();
+        const amount = item.amount.amount;
+        const decimals = item.amount.decimals ?? 18;
+
+        if (contractAddress === NATIVE_ETH_ADDRESS.toLowerCase()) {
+          // Native ETH balance
+          ethWei = String(amount);
+          eth = (Number(amount) / Math.pow(10, decimals)).toFixed(6);
+        } else if (contractAddress === USDC_BASE_SEPOLIA.toLowerCase()) {
+          // USDC balance
+          usdcAtomic = String(amount);
+          usdc = (Number(amount) / Math.pow(10, decimals)).toFixed(2);
+        }
       }
+    } else {
+      console.warn("Unexpected API response structure:", {
+        hasResult: !!result,
+        hasBalances: !!(result && result.balances),
+        isArray: !!(result && result.balances && Array.isArray(result.balances)),
+      });
     }
 
     return {
@@ -168,12 +224,7 @@ export async function getWalletBalance(address: string): Promise<WalletBalance> 
     console.error("Error fetching balance:", error);
 
     // Return zero balances on error
-    return {
-      ethWei: "0",
-      eth: "0.000000",
-      usdcAtomic: "0",
-      usdc: "0.00",
-    };
+    return defaultBalance;
   }
 }
 

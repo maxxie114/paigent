@@ -120,9 +120,51 @@ async function executeToolCall(
 }
 
 /**
+ * Build a context-aware prompt from step inputs.
+ *
+ * @description Formats the inputs from upstream steps into a readable context
+ * section for the LLM prompt.
+ *
+ * @param inputs - The inputs from upstream steps.
+ * @returns Formatted context string.
+ */
+function buildInputContext(inputs: Record<string, unknown>): string {
+  if (!inputs || Object.keys(inputs).length === 0) {
+    return "";
+  }
+
+  const sections: string[] = [];
+
+  for (const [key, value] of Object.entries(inputs)) {
+    const label = key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    
+    if (typeof value === "string") {
+      sections.push(`## ${label}\n${value}`);
+    } else if (typeof value === "object" && value !== null) {
+      // Handle nested objects
+      const obj = value as Record<string, unknown>;
+      if (obj.output && typeof obj.output === "string") {
+        sections.push(`## ${label}\n${obj.output}`);
+      } else if (obj.result && typeof obj.result === "string") {
+        sections.push(`## ${label}\n${obj.result}`);
+      } else if (obj.text && typeof obj.text === "string") {
+        sections.push(`## ${label}\n${obj.text}`);
+      } else {
+        sections.push(`## ${label}\n${JSON.stringify(value, null, 2)}`);
+      }
+    } else {
+      sections.push(`## ${label}\n${String(value)}`);
+    }
+  }
+
+  return sections.join("\n\n");
+}
+
+/**
  * Execute an llm_reason step.
  *
  * @description Calls the LLM for analysis, summarization, or decision-making.
+ * Builds a context-aware prompt from upstream step outputs and the workflow goal.
  * Includes Galileo logging for the LLM call.
  */
  
@@ -142,26 +184,63 @@ async function executeLLMReason(
       throw new Error("Node not found or invalid type");
     }
 
-    const systemPrompt = (node as { systemPrompt?: string }).systemPrompt ||
-      "You are a helpful assistant in a workflow orchestration system.";
+    const nodeLabel = (node as { label?: string }).label || step.stepId;
+    const workflowGoal = run.input?.text || "Complete the workflow task";
 
-    const userPromptTemplate = (node as { userPromptTemplate?: string }).userPromptTemplate ||
-      "Process the following input and provide analysis.";
+    // Build system prompt with workflow context
+    const customSystemPrompt = (node as { systemPrompt?: string }).systemPrompt;
+    const systemPrompt = customSystemPrompt || 
+      `You are an AI assistant executing a step in an automated workflow.
+
+Your current task is: "${nodeLabel}"
+The overall workflow goal is: "${workflowGoal}"
+
+Instructions:
+- Focus on completing the specific task assigned to this step
+- Use the provided context from previous steps
+- Provide clear, actionable output that can be used by subsequent steps
+- Be concise but thorough`;
 
     // Get inputs from previous steps
     const inputs = step.inputs || {};
-    const userPrompt = Object.entries(inputs)
-      .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
-      .join("\n");
+    const hasInputs = Object.keys(inputs).length > 0;
+    
+    // Build user prompt with context from upstream steps
+    const customUserPrompt = (node as { userPromptTemplate?: string }).userPromptTemplate;
+    let userPrompt: string;
+    
+    if (customUserPrompt) {
+      // Use custom prompt template
+      userPrompt = customUserPrompt;
+      if (hasInputs) {
+        userPrompt += "\n\n# Context from Previous Steps\n\n" + buildInputContext(inputs);
+      }
+    } else {
+      // Generate a task-specific prompt based on the node label
+      userPrompt = `# Task: ${nodeLabel}
 
-    const fullUserPrompt = userPromptTemplate + "\n\n" + userPrompt;
+Please complete the following task as part of the workflow: "${workflowGoal}"`;
+
+      if (hasInputs) {
+        userPrompt += "\n\n# Input Data from Previous Steps\n\n" + buildInputContext(inputs);
+        userPrompt += "\n\n# Instructions\n\nUsing the input data above, complete the task: " + nodeLabel;
+      } else {
+        // This is likely the first step - infer what to do from the workflow goal
+        userPrompt += `
+
+Since this is the first step in the workflow, use your knowledge to complete the task.
+Provide detailed, useful output that subsequent steps can build upon.`;
+      }
+    }
+
+    console.log(`[LLM Reason] Executing step "${nodeLabel}" with ${Object.keys(inputs).length} inputs`);
 
     // Call GLM-4.7 via Responses API for reasoning step
     // Galileo logging is enabled for observability
     const response = await callWithSystemPrompt(
       {
         systemPrompt,
-        userPrompt: fullUserPrompt,
+        userPrompt,
         model: RESPONSES_API_MODELS.GLM_4P7,
         maxOutputTokens: 2048,
         temperature: 0.7,
@@ -176,7 +255,8 @@ async function executeLLMReason(
         metadata: {
           stepId: step.stepId,
           runId: step.runId.toString(),
-          nodeLabel: (node as { label?: string }).label ?? step.stepId,
+          nodeLabel,
+          inputCount: String(Object.keys(inputs).length),
         },
       }
     );
@@ -192,6 +272,8 @@ async function executeLLMReason(
       }
     }
 
+    console.log(`[LLM Reason] Step "${nodeLabel}" completed with ${response.usage.totalTokens} tokens`);
+
     return {
       status: "succeeded",
       result,
@@ -201,6 +283,7 @@ async function executeLLMReason(
       },
     };
   } catch (error) {
+    console.error(`[LLM Reason] Step "${step.stepId}" failed:`, error);
     return {
       status: "failed",
       error: normalizeError(error),

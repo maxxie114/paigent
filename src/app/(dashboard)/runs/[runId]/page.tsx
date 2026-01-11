@@ -19,6 +19,12 @@ import {
   DollarSign,
   AlertTriangle,
   Loader2,
+  Zap,
+  Copy,
+  Check,
+  FileText,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -33,6 +39,179 @@ import { cn } from "@/lib/utils";
 import type { RunGraph } from "@/types/graph";
 import type { StepStatus } from "@/types/database";
 import type { SSEEventData } from "@/types/api";
+
+/**
+ * Step output viewer props.
+ */
+type StepOutputViewerProps = {
+  step?: {
+    stepId: string;
+    status: StepStatus;
+    inputs?: Record<string, unknown>;
+    outputs?: Record<string, unknown>;
+    error?: { code?: string; message?: string };
+    metrics?: { latencyMs?: number; costAtomic?: string; tokensUsed?: number };
+  };
+};
+
+/**
+ * Step Output Viewer Component.
+ *
+ * @description Displays the input and output of a workflow step in a readable format.
+ * Handles both text and JSON outputs with proper formatting and copy functionality.
+ */
+function StepOutputViewer({ step }: StepOutputViewerProps) {
+  const [copied, setCopied] = React.useState(false);
+  const [showInputs, setShowInputs] = React.useState(false);
+
+  if (!step) {
+    return null;
+  }
+
+  /**
+   * Format output for display.
+   * Handles strings, objects, and nested structures.
+   */
+  const formatOutput = (data: unknown): string => {
+    if (data === null || data === undefined) {
+      return "No output";
+    }
+    if (typeof data === "string") {
+      return data;
+    }
+    return JSON.stringify(data, null, 2);
+  };
+
+  /**
+   * Get the primary output text.
+   * Extracts the main content from various output formats.
+   */
+  const getOutputText = (): string => {
+    if (!step.outputs) {
+      if (step.error) {
+        return `Error: ${step.error.message || "Unknown error"}`;
+      }
+      return step.status === "running" ? "Step is currently executing..." : "No output yet";
+    }
+
+    // Handle common output formats
+    if (typeof step.outputs === "string") {
+      return step.outputs;
+    }
+
+    // Check for common output keys
+    const output = step.outputs as Record<string, unknown>;
+    if (output.output && typeof output.output === "string") {
+      return output.output;
+    }
+    if (output.result && typeof output.result === "string") {
+      return output.result;
+    }
+    if (output.text && typeof output.text === "string") {
+      return output.text;
+    }
+
+    // Fall back to formatted JSON
+    return formatOutput(step.outputs);
+  };
+
+  const outputText = getOutputText();
+
+  /**
+   * Copy output to clipboard.
+   */
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(outputText);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Metrics Summary */}
+      {step.metrics && (
+        <div className="flex flex-wrap gap-3 text-xs">
+          {step.metrics.latencyMs && (
+            <div className="flex items-center gap-1 px-2 py-1 bg-muted rounded-md">
+              <Clock className="w-3 h-3" />
+              <span>{step.metrics.latencyMs}ms</span>
+            </div>
+          )}
+          {step.metrics.tokensUsed && (
+            <div className="flex items-center gap-1 px-2 py-1 bg-muted rounded-md">
+              <FileText className="w-3 h-3" />
+              <span>{step.metrics.tokensUsed} tokens</span>
+            </div>
+          )}
+          {step.metrics.costAtomic && (
+            <div className="flex items-center gap-1 px-2 py-1 bg-payment/10 text-payment rounded-md">
+              <DollarSign className="w-3 h-3" />
+              <span>${(Number(step.metrics.costAtomic) / 1_000_000).toFixed(4)}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Inputs Section (Collapsible) */}
+      {step.inputs && Object.keys(step.inputs).length > 0 && (
+        <div className="border border-border/50 rounded-lg overflow-hidden">
+          <button
+            onClick={() => setShowInputs(!showInputs)}
+            className="w-full flex items-center justify-between px-3 py-2 bg-muted/30 hover:bg-muted/50 transition-colors"
+          >
+            <span className="text-sm font-medium text-muted-foreground">Inputs</span>
+            {showInputs ? (
+              <ChevronDown className="w-4 h-4 text-muted-foreground" />
+            ) : (
+              <ChevronRight className="w-4 h-4 text-muted-foreground" />
+            )}
+          </button>
+          {showInputs && (
+            <div className="p-3 bg-muted/10">
+              <pre className="text-xs text-muted-foreground whitespace-pre-wrap font-mono overflow-auto max-h-40">
+                {formatOutput(step.inputs)}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Error Display */}
+      {step.error && (
+        <div className="p-3 bg-destructive/10 border border-destructive/30 rounded-lg">
+          <p className="text-sm font-medium text-destructive mb-1">
+            {step.error.code || "Error"}
+          </p>
+          <p className="text-sm text-destructive/80">{step.error.message}</p>
+        </div>
+      )}
+
+      {/* Output Display */}
+      <div className="relative">
+        <div className="absolute top-2 right-2 z-10">
+          <button
+            onClick={handleCopy}
+            className="p-1.5 bg-muted/80 hover:bg-muted rounded-md transition-colors"
+            title="Copy to clipboard"
+          >
+            {copied ? (
+              <Check className="w-4 h-4 text-success" />
+            ) : (
+              <Copy className="w-4 h-4 text-muted-foreground" />
+            )}
+          </button>
+        </div>
+        <ScrollArea className="h-[400px]">
+          <div className="p-4 bg-muted/20 rounded-lg border border-border/50">
+            <pre className="text-sm whitespace-pre-wrap font-mono leading-relaxed">
+              {outputText}
+            </pre>
+          </div>
+        </ScrollArea>
+      </div>
+    </div>
+  );
+}
 
 /**
  * Status configuration.
@@ -59,7 +238,10 @@ type RunData = {
   steps: Array<{
     stepId: string;
     status: StepStatus;
-    metrics?: { latencyMs?: number; costAtomic?: string };
+    inputs?: Record<string, unknown>;
+    outputs?: Record<string, unknown>;
+    error?: { code?: string; message?: string };
+    metrics?: { latencyMs?: number; costAtomic?: string; tokensUsed?: number };
   }>;
   createdAt: string;
 };
@@ -77,6 +259,7 @@ export default function RunDetailPage() {
   const [run, setRun] = useState<RunData | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedStep, setSelectedStep] = useState<string | null>(null);
+  const [executing, setExecuting] = useState(false);
   
   /**
    * Ref to track if initial fetch has completed.
@@ -197,6 +380,59 @@ export default function RunDetailPage() {
     }
   };
 
+  /**
+   * Execute queued steps in the workflow.
+   *
+   * @description Triggers step execution via the execute API endpoint.
+   * Will continue executing until all steps are complete or blocked.
+   */
+  const handleExecute = async () => {
+    setExecuting(true);
+    let totalExecuted = 0;
+    let continueExecuting = true;
+
+    try {
+      // Keep executing until no more steps can be processed
+      while (continueExecuting) {
+        const res = await fetch(`/api/runs/${runId}/execute`, {
+          method: "POST",
+        });
+        const data = await res.json();
+
+        if (!data.success) {
+          toast.error(data.error || "Failed to execute workflow");
+          break;
+        }
+
+        totalExecuted += data.claimed || 0;
+
+        // Refresh run data after each batch
+        await fetchRun();
+
+        // Stop if no steps were claimed (all done or blocked)
+        if (data.claimed === 0) {
+          continueExecuting = false;
+        }
+
+        // Small delay between batches to allow UI updates
+        if (continueExecuting) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      }
+
+      if (totalExecuted > 0) {
+        toast.success(`Executed ${totalExecuted} step(s)`);
+      } else {
+        toast.info("No queued steps to execute");
+      }
+    } catch {
+      toast.error("Failed to execute workflow");
+    } finally {
+      setExecuting(false);
+      fetchRun();
+    }
+  };
+
   // Format cost
   const formatCost = (atomic: string) => {
     const usdc = Number(atomic) / 1_000_000;
@@ -234,6 +470,13 @@ export default function RunDetailPage() {
   const isActive = run.status === "running" || run.status === "queued";
   const canCancel = isActive || run.status === "paused_for_approval";
   const canResume = run.status === "paused_for_approval";
+  
+  // Check if there are executable steps (queued or blocked)
+  const hasExecutableSteps = run.steps.some(
+    (s) => s.status === "queued" || s.status === "blocked"
+  );
+  const isTerminalState = ["succeeded", "failed", "canceled"].includes(run.status);
+  const canExecute = hasExecutableSteps && !isTerminalState;
 
   return (
     <div className="space-y-6">
@@ -270,6 +513,25 @@ export default function RunDetailPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          {canExecute && (
+            <Button
+              onClick={handleExecute}
+              disabled={executing}
+              className="bg-gradient-to-r from-cyan-accent to-primary hover:from-cyan-accent/90 hover:to-primary/90 text-primary-foreground font-semibold"
+            >
+              {executing ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Executing...
+                </>
+              ) : (
+                <>
+                  <Zap className="w-4 h-4 mr-2" />
+                  Execute Workflow
+                </>
+              )}
+            </Button>
+          )}
           {canResume && (
             <Button
               variant="outline"
@@ -410,65 +672,98 @@ export default function RunDetailPage() {
         </TabsContent>
 
         <TabsContent value="steps">
-          <Card className="bg-card/50 backdrop-blur border-border/50">
-            <CardHeader>
-              <CardTitle>Step Details</CardTitle>
-              <CardDescription>
-                Individual step execution status
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {run.steps.map((step) => {
-                  const node = run.graph.nodes.find((n) => n.id === step.stepId);
-                  const stepStatusInfo = STATUS_CONFIG[step.status] || STATUS_CONFIG.queued;
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Steps List */}
+            <Card className="bg-card/50 backdrop-blur border-border/50">
+              <CardHeader>
+                <CardTitle>Step Details</CardTitle>
+                <CardDescription>
+                  Click a step to view its output
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {run.steps.map((step) => {
+                    const node = run.graph.nodes.find((n) => n.id === step.stepId);
+                    const stepStatusInfo = STATUS_CONFIG[step.status] || STATUS_CONFIG.queued;
 
-                  return (
-                    <div
-                      key={step.stepId}
-                      className={cn(
-                        "flex items-center justify-between p-4 rounded-lg bg-muted/30",
-                        selectedStep === step.stepId && "ring-2 ring-primary"
-                      )}
-                      onClick={() => setSelectedStep(step.stepId)}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className={cn("p-2 rounded-md bg-muted", stepStatusInfo.color)}>
-                          {React.createElement(stepStatusInfo.icon, {
-                            className: cn(
-                              "w-4 h-4",
-                              step.status === "running" && "animate-spin"
-                            ),
-                          })}
+                    return (
+                      <div
+                        key={step.stepId}
+                        className={cn(
+                          "flex items-center justify-between p-4 rounded-lg bg-muted/30 cursor-pointer transition-all hover:bg-muted/50",
+                          selectedStep === step.stepId && "ring-2 ring-primary bg-muted/50"
+                        )}
+                        onClick={() => setSelectedStep(step.stepId)}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={cn("p-2 rounded-md bg-muted", stepStatusInfo.color)}>
+                            {React.createElement(stepStatusInfo.icon, {
+                              className: cn(
+                                "w-4 h-4",
+                                step.status === "running" && "animate-spin"
+                              ),
+                            })}
+                          </div>
+                          <div>
+                            <p className="font-medium">{node?.label || step.stepId}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {node?.type.replace("_", " ")}
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="font-medium">{node?.label || step.stepId}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {node?.type.replace("_", " ")}
-                          </p>
+                        <div className="flex items-center gap-4">
+                          {step.metrics?.tokensUsed && (
+                            <span className="text-xs text-muted-foreground">
+                              {step.metrics.tokensUsed} tokens
+                            </span>
+                          )}
+                          {step.metrics?.latencyMs && (
+                            <span className="text-xs text-muted-foreground">
+                              {step.metrics.latencyMs}ms
+                            </span>
+                          )}
+                          {step.metrics?.costAtomic && (
+                            <span className="text-xs text-payment">
+                              {formatCost(step.metrics.costAtomic)}
+                            </span>
+                          )}
+                          <Badge variant={stepStatusInfo.color.includes("success") ? "default" : "outline"}>
+                            {stepStatusInfo.label}
+                          </Badge>
                         </div>
                       </div>
-                      <div className="flex items-center gap-4">
-                        {step.metrics?.latencyMs && (
-                          <span className="text-xs text-muted-foreground">
-                            {step.metrics.latencyMs}ms
-                          </span>
-                        )}
-                        {step.metrics?.costAtomic && (
-                          <span className="text-xs text-payment">
-                            {formatCost(step.metrics.costAtomic)}
-                          </span>
-                        )}
-                        <Badge variant={stepStatusInfo.color.includes("success") ? "default" : "outline"}>
-                          {stepStatusInfo.label}
-                        </Badge>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Step Output Viewer */}
+            <Card className="bg-card/50 backdrop-blur border-border/50">
+              <CardHeader>
+                <CardTitle>
+                  {selectedStep
+                    ? run.graph.nodes.find((n) => n.id === selectedStep)?.label || selectedStep
+                    : "Step Output"}
+                </CardTitle>
+                <CardDescription>
+                  {selectedStep ? "Output from selected step" : "Select a step to view its output"}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {selectedStep ? (
+                  <StepOutputViewer
+                    step={run.steps.find((s) => s.stepId === selectedStep)}
+                  />
+                ) : (
+                  <div className="flex items-center justify-center py-12 text-muted-foreground">
+                    <p className="text-sm">Select a step from the list to view its output</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
       </Tabs>
     </div>

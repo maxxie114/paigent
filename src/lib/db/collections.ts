@@ -404,6 +404,7 @@ export type RunEventType =
   | "RUN_SUCCEEDED"
   | "RUN_FAILED"
   | "RUN_CANCELED"
+  | "STEPS_EXECUTED"
   | "STEP_CLAIMED"
   | "STEP_STARTED"
   | "STEP_SUCCEEDED"

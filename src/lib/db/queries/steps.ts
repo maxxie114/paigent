@@ -316,23 +316,63 @@ export async function markStepBlocked(
 }
 
 /**
- * Unblock a step (after approval or dependency resolution).
+ * Reset a stuck running step back to queued state.
  *
- * @param stepId - The step's ObjectId.
- * @returns True if updated, false if not found.
+ * @description Useful for recovering from steps that errored during execution
+ * but weren't properly marked as failed (e.g., due to concurrent execution issues).
+ *
+ * @param runId - The run's ObjectId.
+ * @param stepId - The step's string ID (not ObjectId).
+ * @returns True if updated, false if not found or not in running state.
  */
-export async function unblockStep(stepId: ObjectId): Promise<boolean> {
+export async function resetStuckStep(
+  runId: ObjectId,
+  stepId: string
+): Promise<boolean> {
   const steps = await collections.runSteps();
 
   const result = await steps.updateOne(
-    { _id: stepId, status: "blocked" },
+    { runId, stepId, status: "running" },
     {
       $set: {
         status: "queued" as StepStatus,
         updatedAt: new Date(),
       },
-      $unset: { error: "" },
+      $unset: { lockedBy: "" },
     }
+  );
+
+  return result.modifiedCount > 0;
+}
+
+/**
+ * Unblock a step (after approval or dependency resolution).
+ *
+ * @description Changes the step status from "blocked" to "queued" and optionally
+ * populates inputs from upstream step outputs.
+ *
+ * @param stepId - The step's ObjectId.
+ * @param inputs - Optional inputs to populate from upstream steps.
+ * @returns True if updated, false if not found.
+ */
+export async function unblockStep(
+  stepId: ObjectId,
+  inputs?: Record<string, unknown>
+): Promise<boolean> {
+  const steps = await collections.runSteps();
+
+  const updateDoc: Record<string, unknown> = {
+    $set: {
+      status: "queued" as StepStatus,
+      updatedAt: new Date(),
+      ...(inputs && Object.keys(inputs).length > 0 ? { inputs } : {}),
+    },
+    $unset: { error: "" },
+  };
+
+  const result = await steps.updateOne(
+    { _id: stepId, status: "blocked" },
+    updateDoc
   );
 
   return result.modifiedCount > 0;
@@ -342,7 +382,8 @@ export async function unblockStep(stepId: ObjectId): Promise<boolean> {
  * Unblock steps that depend on a completed step.
  *
  * @description After a step succeeds, unblock any downstream steps
- * that were waiting for it.
+ * that were waiting for it. Collects outputs from all completed upstream
+ * steps and passes them as inputs to the unblocked step.
  *
  * @param runId - The run ID.
  * @param completedStepId - The step ID that just completed.
@@ -352,7 +393,7 @@ export async function unblockStep(stepId: ObjectId): Promise<boolean> {
 export async function unblockDependentSteps(
   runId: ObjectId,
   completedStepId: string,
-  graph: { nodes: Array<{ id: string; dependsOn?: string[] }>; edges: Array<{ from: string; to: string; type: string }> }
+  graph: { nodes: Array<{ id: string; label?: string; dependsOn?: string[] }>; edges: Array<{ from: string; to: string; type: string }> }
 ): Promise<number> {
   const allSteps = await getStepsForRun(runId);
 
@@ -395,8 +436,41 @@ export async function unblockDependentSteps(
     if (allSatisfied) {
       const targetStep = allSteps.find((s) => s.stepId === targetId);
       if (targetStep && targetStep.status === "blocked") {
-        const success = await unblockStep(targetStep._id);
-        if (success) unblocked++;
+        // Gather inputs from all completed upstream steps
+        const inputs: Record<string, unknown> = {};
+        
+        for (const depId of allDeps) {
+          const depStep = allSteps.find((s) => s.stepId === depId);
+          const depNode = graph.nodes.find((n) => n.id === depId);
+          
+          if (depStep?.outputs) {
+            // Use the step label (or ID) as the input key for better readability
+            const inputKey = depNode?.label?.toLowerCase().replace(/\s+/g, "_") || depId;
+            
+            // Extract the main content from outputs
+            const outputs = depStep.outputs as Record<string, unknown>;
+            
+            // If outputs has a single string value, use it directly
+            if (typeof outputs === "string") {
+              inputs[inputKey] = outputs;
+            } else if (outputs.output && typeof outputs.output === "string") {
+              inputs[inputKey] = outputs.output;
+            } else if (outputs.result && typeof outputs.result === "string") {
+              inputs[inputKey] = outputs.result;
+            } else if (outputs.text && typeof outputs.text === "string") {
+              inputs[inputKey] = outputs.text;
+            } else {
+              // Store the full outputs object
+              inputs[inputKey] = outputs;
+            }
+          }
+        }
+        
+        const success = await unblockStep(targetStep._id, inputs);
+        if (success) {
+          console.log(`[Steps] Unblocked step ${targetId} with inputs from: ${allDeps.join(", ")}`);
+          unblocked++;
+        }
       }
     }
   }
