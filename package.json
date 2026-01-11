@@ -26,6 +26,7 @@
     "@radix-ui/react-tabs": "^1.1.13",
     "@x402/core": "^2.2.0",
     "@x402/evm": "^2.2.0",
+    "@x402/extensions": "^2.2.0",
     "@x402/fetch": "^2.2.0",
     "@xyflow/react": "^12.10.0",
     "class-variance-authority": "^0.7.1",

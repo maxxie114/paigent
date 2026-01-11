@@ -264,33 +264,52 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 /**
  * Handle syncing tools from the x402 Bazaar.
  *
+ * @description Fetches tools from the Coinbase x402 Bazaar discovery API and
+ * upserts them into the workspace's tools collection.
+ *
  * @param workspaceId - The workspace to sync tools into.
- * @param body - Request body with sync options.
+ * @param body - Request body with sync options matching official Bazaar API params.
  * @returns JSON response with sync results.
+ *
+ * @see https://docs.cdp.coinbase.com/x402/bazaar#query-parameters
  */
 async function handleBazaarSync(
   workspaceId: ObjectId,
   body: {
+    /** Filter by protocol type (e.g., "http"). */
+    type?: string;
+    /** Maximum number of results to return. */
+    limit?: number;
+    /** Offset for pagination. */
+    offset?: number;
+    /** Filter by network (CAIP-2 format, e.g., "eip155:84532"). */
     network?: string;
-    category?: string;
-    tags?: string[];
-    maxPriceAtomic?: string;
+    /** Search query for description matching. */
     query?: string;
+    /** Client-side filter: maximum price in atomic units. */
+    maxPriceAtomic?: string;
   }
 ): Promise<NextResponse> {
-  const { network, category, tags, maxPriceAtomic, query } = body;
+  const { type, limit, offset, network, query, maxPriceAtomic } = body;
 
   console.log(`[Tools API] Starting Bazaar sync for workspace ${workspaceId}`);
 
   try {
-    // Fetch tools from Bazaar
-    const bazaarTools = await fetchBazaarAsTools({
+    // Fetch tools from Bazaar using official API parameters
+    // @see https://docs.cdp.coinbase.com/x402/bazaar#query-parameters
+    let bazaarTools = await fetchBazaarAsTools({
+      type,
+      limit,
+      offset,
       network,
-      category,
-      tags,
-      maxPriceAtomic,
       query,
     });
+
+    // Client-side filtering by max price (not supported by Bazaar API)
+    if (maxPriceAtomic && bazaarTools.length > 0) {
+      const { filterByBudget } = await import("@/lib/cdp/bazaar");
+      bazaarTools = filterByBudget(bazaarTools, maxPriceAtomic);
+    }
 
     if (bazaarTools.length === 0) {
       return NextResponse.json({

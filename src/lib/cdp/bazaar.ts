@@ -78,47 +78,178 @@ export const BazaarResourceSchema = z.object({
 export type BazaarResource = z.infer<typeof BazaarResourceSchema>;
 
 /**
- * Paginated response from the Bazaar discovery API.
+ * Payment acceptance configuration for a Bazaar resource.
  *
- * @description Matches the CDP Bazaar Discovery API response schema.
- * Note: The API uses "resources" (not "items") for the array field.
+ * @description Defines the payment requirements for accessing an endpoint.
+ * Each resource may accept payments in multiple ways.
  *
- * @see https://docs.cdp.coinbase.com/x402/bazaar.md
+ * @see https://docs.cdp.coinbase.com/x402/quickstart-for-buyers
  */
-export const BazaarListResponseSchema = z.object({
-  /** List of discovered resources. */
-  resources: z.array(BazaarResourceSchema),
-  /** Total number of resources available. */
+export const BazaarPaymentAcceptSchema = z.object({
+  /** Payment scheme (e.g., "exact"). */
+  scheme: z.string().optional(),
+  /** Payment amount as a string (e.g., "$0.001" or atomic units). */
+  amount: z.string().optional(),
+  /** Price as a string (alternative to amount). */
+  price: z.string().optional(),
+  /** Network identifier in CAIP-2 format (e.g., "eip155:8453"). */
+  network: z.string().optional(),
+  /** Address to pay to. */
+  payTo: z.string().optional(),
+}).passthrough();
+
+export type BazaarPaymentAccept = z.infer<typeof BazaarPaymentAcceptSchema>;
+
+/**
+ * A single item/endpoint from the Bazaar discovery API.
+ *
+ * @description Matches the actual CDP Bazaar Discovery API response format.
+ * The API returns items with url, accepts array, and optional metadata.
+ *
+ * @see https://docs.cdp.coinbase.com/x402/quickstart-for-buyers
+ */
+export const BazaarItemSchema = z.object({
+  /** Full URL of the endpoint (including path). */
+  url: z.string(),
+  /** Protocol type (e.g., "http"). */
+  type: z.string().optional(),
+  /** Payment acceptance configurations. */
+  accepts: z.array(BazaarPaymentAcceptSchema).optional(),
+  /** Human-readable description of the endpoint. */
+  description: z.string().optional(),
+  /** MIME type of the response. */
+  mimeType: z.string().optional(),
+  /** Metadata about the endpoint including input/output schemas. */
+  metadata: BazaarResourceMetadataSchema.optional(),
+}).passthrough(); // Allow additional fields for forward compatibility
+
+export type BazaarItem = z.infer<typeof BazaarItemSchema>;
+
+/**
+ * Raw paginated response from the Bazaar discovery API.
+ *
+ * @description The CDP Bazaar API has inconsistent documentation:
+ * - API Reference (https://docs.cdp.coinbase.com/x402/bazaar#api-reference) shows `resources`
+ * - Quickstart examples (https://docs.cdp.coinbase.com/x402/quickstart-for-buyers) show `items`
+ *
+ * This schema accepts both formats for maximum compatibility.
+ *
+ * @see https://docs.cdp.coinbase.com/x402/bazaar#api-reference
+ */
+const BazaarRawResponseSchema = z.object({
+  /** List of discovered resources (API Reference format). */
+  resources: z.array(BazaarItemSchema).optional(),
+  /** List of discovered items (Quickstart format). */
+  items: z.array(BazaarItemSchema).optional(),
+  /** Total number of items available. */
   total: z.number().optional(),
   /** Number of results returned (matches limit param). */
   limit: z.number().optional(),
   /** Offset for pagination. */
   offset: z.number().optional(),
-});
+  /** Cursor for next page. */
+  cursor: z.string().optional(),
+  /** Indicates if there are more results. */
+  hasMore: z.boolean().optional(),
+}).passthrough(); // Allow additional fields for forward compatibility
 
-export type BazaarListResponse = z.infer<typeof BazaarListResponseSchema>;
+/**
+ * Normalized paginated response from the Bazaar discovery API.
+ *
+ * @description This type represents the normalized response where the array
+ * of services is always available as `resources` (matching the official
+ * API Reference documentation).
+ *
+ * @see https://docs.cdp.coinbase.com/x402/bazaar#api-reference
+ */
+export type BazaarListResponse = {
+  /** List of discovered resources/services. */
+  resources: BazaarItem[];
+  /** Total number of items available. */
+  total?: number;
+  /** Number of results returned (matches limit param). */
+  limit?: number;
+  /** Offset for pagination. */
+  offset?: number;
+  /** Cursor for next page. */
+  cursor?: string;
+  /** Indicates if there are more results. */
+  hasMore?: boolean;
+};
+
+/**
+ * Parse and normalize the Bazaar API response.
+ *
+ * @description Handles both `resources` (API Reference) and `items` (Quickstart)
+ * response formats, normalizing to always use `resources` for consistency.
+ *
+ * @param data - Raw API response data.
+ * @returns Normalized response with `resources` array.
+ * @throws {z.ZodError} If the response doesn't match expected schema.
+ * @throws {Error} If neither `resources` nor `items` array is present.
+ */
+function parseBazaarResponse(data: unknown): BazaarListResponse {
+  const parsed = BazaarRawResponseSchema.parse(data);
+  
+  // Normalize: prefer `resources`, fall back to `items`
+  const resources = parsed.resources ?? parsed.items;
+  
+  if (!resources) {
+    throw new Error(
+      "Bazaar API response missing both 'resources' and 'items' arrays. " +
+      "Response keys: " + Object.keys(parsed as object).join(", ")
+    );
+  }
+  
+  return {
+    resources,
+    total: parsed.total,
+    limit: parsed.limit,
+    offset: parsed.offset,
+    cursor: parsed.cursor,
+    hasMore: parsed.hasMore,
+  };
+}
 
 // =============================================================================
 // Bazaar Query Options
 // =============================================================================
 
 /**
- * Options for querying the Bazaar.
+ * Options for querying the Bazaar discovery endpoint.
+ *
+ * @description Matches the query parameters documented in the CDP Bazaar API Reference.
+ *
+ * @see https://docs.cdp.coinbase.com/x402/bazaar#query-parameters
  */
 export type BazaarQueryOptions = {
-  /** Maximum number of results to return. */
+  /**
+   * Filter by protocol type (e.g., "http").
+   *
+   * @example "http"
+   */
+  type?: string;
+  /**
+   * Maximum number of results to return.
+   *
+   * @default 20 (per API docs), but we use 100 for efficiency
+   */
   limit?: number;
-  /** Pagination cursor from previous response. */
-  cursor?: string;
-  /** Filter by category. */
-  category?: string;
-  /** Filter by tags (comma-separated). */
-  tags?: string[];
-  /** Filter by network (CAIP-2 format). */
+  /**
+   * Offset for pagination.
+   *
+   * @default 0
+   */
+  offset?: number;
+  /**
+   * Filter by network (CAIP-2 format). May not be supported by all facilitators.
+   *
+   * @example "eip155:84532" // Base Sepolia
+   */
   network?: string;
-  /** Maximum price in atomic units. */
-  maxPriceAtomic?: string;
-  /** Search query for description matching. */
+  /**
+   * Search query for description matching. May not be supported by all facilitators.
+   */
   query?: string;
 };
 
@@ -141,18 +272,19 @@ export type BazaarQueryOptions = {
  *
  * @example
  * ```typescript
- * // Fetch all available services
- * const { resources } = await fetchBazaarServices();
+ * // Fetch all available HTTP services
+ * const { resources } = await fetchBazaarServices({ type: "http" });
  * console.log(`Found ${resources.length} services`);
  *
  * // Filter by network
  * const baseSepoliaServices = await fetchBazaarServices({
+ *   type: "http",
  *   network: "eip155:84532", // Base Sepolia
  * });
  *
- * // Search with pagination
- * const page1 = await fetchBazaarServices({ limit: 20 });
- * const page2 = await fetchBazaarServices({ limit: 20, cursor: "20" });
+ * // Paginate through results
+ * const page1 = await fetchBazaarServices({ limit: 20, offset: 0 });
+ * const page2 = await fetchBazaarServices({ limit: 20, offset: 20 });
  * ```
  *
  * @see https://docs.cdp.coinbase.com/x402/bazaar
@@ -160,26 +292,24 @@ export type BazaarQueryOptions = {
 export async function fetchBazaarServices(
   options: BazaarQueryOptions = {}
 ): Promise<BazaarListResponse> {
-  const { limit = DEFAULT_LIMIT, cursor, category, tags, network, maxPriceAtomic, query } = options;
+  const { type, limit = DEFAULT_LIMIT, offset = 0, network, query } = options;
 
-  // Build query parameters
+  // Build query parameters per official API Reference:
+  // https://docs.cdp.coinbase.com/x402/bazaar#query-parameters
   const params = new URLSearchParams();
+  
+  // Core pagination parameters (officially documented)
   params.set("limit", limit.toString());
-
-  if (cursor) {
-    params.set("cursor", cursor);
+  params.set("offset", offset.toString());
+  
+  // Filter by protocol type (officially documented)
+  if (type) {
+    params.set("type", type);
   }
-  if (category) {
-    params.set("category", category);
-  }
-  if (tags && tags.length > 0) {
-    params.set("tags", tags.join(","));
-  }
+  
+  // Additional filters (may not be supported by all facilitators)
   if (network) {
     params.set("network", network);
-  }
-  if (maxPriceAtomic) {
-    params.set("maxPrice", maxPriceAtomic);
   }
   if (query) {
     params.set("q", query);
@@ -206,8 +336,11 @@ export async function fetchBazaarServices(
 
     const data = await response.json();
 
-    // Validate response shape
-    const validated = BazaarListResponseSchema.parse(data);
+    // Log raw response keys for debugging
+    console.log(`[Bazaar] Response keys: ${Object.keys(data as object).join(", ")}`);
+
+    // Parse and normalize response (handles both `resources` and `items` formats)
+    const validated = parseBazaarResponse(data);
 
     console.log(`[Bazaar] Found ${validated.resources.length} services`);
 
@@ -225,19 +358,19 @@ export async function fetchBazaarServices(
 }
 
 /**
- * Group Bazaar resources by base URL to create tool entries.
+ * Group Bazaar items by base URL to create tool entries.
  *
  * @description The Bazaar returns individual endpoints, but our tool model
  * groups endpoints under a single base URL. This function aggregates
  * endpoints by their base URL.
  *
- * @param resources - List of Bazaar resources.
+ * @param items - List of Bazaar items.
  * @returns Map of base URL to grouped endpoints.
  *
  * @example
  * ```typescript
  * const { resources } = await fetchBazaarServices();
- * const grouped = groupResourcesByBaseUrl(resources);
+ * const grouped = groupItemsByBaseUrl(resources);
  *
  * for (const [baseUrl, endpoints] of grouped) {
  *   console.log(`Tool: ${baseUrl}`);
@@ -245,22 +378,22 @@ export async function fetchBazaarServices(
  * }
  * ```
  */
-export function groupResourcesByBaseUrl(
-  resources: BazaarResource[]
-): Map<string, BazaarResource[]> {
-  const grouped = new Map<string, BazaarResource[]>();
+export function groupItemsByBaseUrl(
+  items: BazaarItem[]
+): Map<string, BazaarItem[]> {
+  const grouped = new Map<string, BazaarItem[]>();
 
-  for (const resource of resources) {
+  for (const item of items) {
     try {
-      const url = new URL(resource.url);
+      const url = new URL(item.url);
       const baseUrl = `${url.protocol}//${url.host}`;
 
       const existing = grouped.get(baseUrl) || [];
-      existing.push(resource);
+      existing.push(item);
       grouped.set(baseUrl, existing);
     } catch {
       // Skip malformed URLs
-      console.warn(`[Bazaar] Skipping malformed URL: ${resource.url}`);
+      console.warn(`[Bazaar] Skipping malformed URL: ${item.url}`);
     }
   }
 
@@ -268,21 +401,21 @@ export function groupResourcesByBaseUrl(
 }
 
 /**
- * Convert a grouped set of Bazaar resources into a tool-compatible format.
+ * Convert a grouped set of Bazaar items into a tool-compatible format.
  *
- * @description Transforms Bazaar resources into the format expected by our
+ * @description Transforms Bazaar items into the format expected by our
  * tools collection, including endpoints, pricing hints, and reputation.
- * Handles the CDP Bazaar API response format where metadata is nested.
+ * Handles the CDP Bazaar API response format where accepts array contains pricing.
  *
  * @param baseUrl - The base URL for the tool.
- * @param resources - List of endpoints under this base URL.
+ * @param items - List of endpoints under this base URL.
  * @returns Tool-compatible object.
  *
- * @see https://docs.cdp.coinbase.com/x402/bazaar.md
+ * @see https://docs.cdp.coinbase.com/x402/quickstart-for-buyers
  */
 export function convertToToolFormat(
   baseUrl: string,
-  resources: BazaarResource[]
+  items: BazaarItem[]
 ): {
   source: "bazaar";
   name: string;
@@ -316,21 +449,21 @@ export function convertToToolFormat(
     name = "Unknown Service";
   }
 
-  // Aggregate descriptions from metadata
-  const descriptions = resources
-    .filter((r) => r.metadata?.description)
-    .map((r) => r.metadata!.description!)
+  // Aggregate descriptions from items (description can be at item level or in metadata)
+  const descriptions = items
+    .filter((item) => item.description || item.metadata?.description)
+    .map((item) => item.description || item.metadata!.description!)
     .slice(0, 3);
   const description =
     descriptions.length > 0
       ? descriptions.join(". ")
       : `x402-compatible service at ${baseUrl}`;
 
-  // Convert endpoints - extract info from URL and metadata
-  const endpoints = resources.map((r) => {
+  // Convert endpoints - extract info from URL, description, and metadata
+  const endpoints = items.map((item) => {
     let path: string;
     try {
-      const url = new URL(r.url);
+      const url = new URL(item.url);
       path = url.pathname || "/";
     } catch {
       path = "/";
@@ -339,19 +472,19 @@ export function convertToToolFormat(
     // Try to determine method from metadata.input if available
     // The input field may contain HTTP method info like { type: "http", method: "GET", ... }
     let method = "GET";
-    const inputInfo = r.metadata?.input as Record<string, unknown> | undefined;
+    const inputInfo = item.metadata?.input as Record<string, unknown> | undefined;
     if (inputInfo?.method && typeof inputInfo.method === "string") {
       method = inputInfo.method.toUpperCase();
     }
 
     // Extract schemas from metadata
     const inputSchema = inputInfo as Record<string, unknown> | undefined;
-    const outputSchema = r.metadata?.output as Record<string, unknown> | undefined;
+    const outputSchema = item.metadata?.output as Record<string, unknown> | undefined;
 
     return {
       path,
       method: method as "GET" | "POST" | "PUT" | "DELETE" | "PATCH",
-      description: r.metadata?.description,
+      description: item.description || item.metadata?.description,
       requestSchema: inputSchema,
       responseSchema: outputSchema,
     };
@@ -362,6 +495,19 @@ export function convertToToolFormat(
     (ep, idx, arr) =>
       arr.findIndex((e) => e.path === ep.path && e.method === ep.method) === idx
   );
+
+  // Extract pricing hints from the first item that has accepts array
+  let pricingHints: { typicalAmountAtomic?: string; network?: string; asset?: string } | undefined;
+  const itemWithPricing = items.find((item) => item.accepts && item.accepts.length > 0);
+  if (itemWithPricing?.accepts?.[0]) {
+    const acceptInfo = itemWithPricing.accepts[0];
+    pricingHints = {
+      // Amount could be in `amount` or `price` field
+      typicalAmountAtomic: acceptInfo.amount || acceptInfo.price,
+      network: acceptInfo.network,
+      asset: undefined, // Asset info not directly provided in accepts
+    };
+  }
 
   // Default reputation - the Bazaar API doesn't provide quality scores in current response
   // We default to reasonable values; actual metrics would need to be tracked over time
@@ -377,9 +523,7 @@ export function convertToToolFormat(
       disputeRate: 0,
       lastVerifiedAt: undefined,
     },
-    // Note: The CDP Bazaar API currently doesn't include pricing in discovery response
-    // Pricing is determined at request time via 402 response headers
-    pricingHints: undefined,
+    pricingHints,
   };
 }
 
@@ -418,11 +562,11 @@ export async function fetchBazaarAsTools(
     return [];
   }
 
-  const grouped = groupResourcesByBaseUrl(resources);
+  const grouped = groupItemsByBaseUrl(resources);
   const tools: Array<ReturnType<typeof convertToToolFormat>> = [];
 
-  for (const [baseUrl, groupedResources] of grouped) {
-    const tool = convertToToolFormat(baseUrl, groupedResources);
+  for (const [baseUrl, groupedItems] of grouped) {
+    const tool = convertToToolFormat(baseUrl, groupedItems);
     tools.push(tool);
   }
 
