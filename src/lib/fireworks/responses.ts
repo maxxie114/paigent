@@ -397,8 +397,12 @@ function toApiParams(params: CreateResponseParams): Record<string, unknown> {
 /**
  * Extract text content from response output.
  *
+ * @description Extracts text content from the response output array.
+ * Handles multiple content types including reasoning output from GLM-4.7.
+ * Prioritizes non-reasoning text content for the main output.
+ *
  * @param output - The output items array.
- * @returns Concatenated text content.
+ * @returns Concatenated text content (excluding reasoning content).
  */
 function extractTextFromOutput(output: OutputItem[]): string {
   const textParts: string[] = [];
@@ -409,7 +413,14 @@ function extractTextFromOutput(output: OutputItem[]): string {
         textParts.push(item.content);
       } else if (Array.isArray(item.content)) {
         for (const contentItem of item.content) {
+          // Include text content; skip reasoning content types
+          // The Fireworks API may return reasoning as separate content items
+          // with type "reasoning" or similar; we only want "text" type
           if (contentItem.type === "text" && contentItem.text) {
+            textParts.push(contentItem.text);
+          }
+          // Also handle "input_text" type that may appear in some responses
+          if (contentItem.type === "input_text" && contentItem.text) {
             textParts.push(contentItem.text);
           }
         }
@@ -419,6 +430,7 @@ function extractTextFromOutput(output: OutputItem[]): string {
 
   return textParts.join("");
 }
+
 
 /**
  * Extract tool calls from response output.

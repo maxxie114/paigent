@@ -81,31 +81,100 @@ export async function GET(
     // Create SSE stream
     const encoder = new TextEncoder();
     let lastEventTime = new Date(0);
-    let isAborted = false;
+    /**
+     * Flag to track if the stream has been aborted or closed.
+     * Used to prevent operations on a closed controller.
+     */
+    let isStreamClosed = false;
+    /**
+     * Reference to the ping interval timer for cleanup.
+     */
+    let pingIntervalId: ReturnType<typeof setInterval> | undefined;
+    /**
+     * Reference to the poll timeout for cleanup.
+     */
+    let pollTimeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    /**
+     * Safely enqueue data to the controller.
+     * Prevents "Controller is already closed" errors by checking state first.
+     *
+     * @param controller - The ReadableStream controller.
+     * @param data - The encoded data to enqueue.
+     * @returns True if enqueue succeeded, false if stream is closed.
+     */
+    const safeEnqueue = (
+      controller: ReadableStreamDefaultController<Uint8Array>,
+      data: Uint8Array
+    ): boolean => {
+      if (isStreamClosed) return false;
+      try {
+        controller.enqueue(data);
+        return true;
+      } catch {
+        // Controller may have been closed between check and enqueue
+        isStreamClosed = true;
+        return false;
+      }
+    };
+
+    /**
+     * Safely close the controller.
+     * Prevents "Controller is already closed" errors by checking state first.
+     *
+     * @param controller - The ReadableStream controller.
+     */
+    const safeClose = (
+      controller: ReadableStreamDefaultController<Uint8Array>
+    ): void => {
+      if (isStreamClosed) return;
+      isStreamClosed = true;
+
+      // Clean up intervals and timeouts first
+      if (pingIntervalId !== undefined) {
+        clearInterval(pingIntervalId);
+        pingIntervalId = undefined;
+      }
+      if (pollTimeoutId !== undefined) {
+        clearTimeout(pollTimeoutId);
+        pollTimeoutId = undefined;
+      }
+
+      try {
+        controller.close();
+      } catch {
+        // Ignore close errors - controller may already be closed
+      }
+    };
 
     const stream = new ReadableStream({
       async start(controller) {
         // Send initial connection event
-        controller.enqueue(
-          encoder.encode(
-            `data: ${JSON.stringify({
-              type: "connected",
-              runId,
-              timestamp: new Date().toISOString(),
-            })}\n\n`
+        if (
+          !safeEnqueue(
+            controller,
+            encoder.encode(
+              `data: ${JSON.stringify({
+                type: "connected",
+                runId,
+                timestamp: new Date().toISOString(),
+              })}\n\n`
+            )
           )
-        );
+        ) {
+          return;
+        }
 
         // Set up polling for new events
         const pollEvents = async () => {
-          if (isAborted) return;
+          if (isStreamClosed) return;
 
           try {
             // Get new events since last check
             const newEvents = await getEventsSince(runObjectId, lastEventTime);
 
             for (const event of newEvents) {
-              if (isAborted) return;
+              if (isStreamClosed) return;
 
               const eventData = JSON.stringify({
                 id: event._id.toString(),
@@ -115,7 +184,9 @@ export async function GET(
                 actor: event.actor,
               });
 
-              controller.enqueue(encoder.encode(`data: ${eventData}\n\n`));
+              if (!safeEnqueue(controller, encoder.encode(`data: ${eventData}\n\n`))) {
+                return;
+              }
 
               // Update last event time
               if (event.ts > lastEventTime) {
@@ -131,7 +202,8 @@ export async function GET(
               currentRun?.status === "canceled";
 
             if (isComplete) {
-              controller.enqueue(
+              safeEnqueue(
+                controller,
                 encoder.encode(
                   `data: ${JSON.stringify({
                     type: "run_complete",
@@ -139,18 +211,18 @@ export async function GET(
                   })}\n\n`
                 )
               );
-              controller.close();
+              safeClose(controller);
               return;
             }
 
             // Schedule next poll
-            if (!isAborted) {
-              setTimeout(pollEvents, POLL_INTERVAL);
+            if (!isStreamClosed) {
+              pollTimeoutId = setTimeout(pollEvents, POLL_INTERVAL);
             }
           } catch (error) {
             console.error("SSE polling error:", error);
-            if (!isAborted) {
-              setTimeout(pollEvents, POLL_INTERVAL * 2);
+            if (!isStreamClosed) {
+              pollTimeoutId = setTimeout(pollEvents, POLL_INTERVAL * 2);
             }
           }
         };
@@ -159,23 +231,20 @@ export async function GET(
         pollEvents();
 
         // Set up keep-alive ping
-        const pingInterval = setInterval(() => {
-          if (isAborted) {
-            clearInterval(pingInterval);
+        pingIntervalId = setInterval(() => {
+          if (isStreamClosed) {
+            if (pingIntervalId !== undefined) {
+              clearInterval(pingIntervalId);
+              pingIntervalId = undefined;
+            }
             return;
           }
-          controller.enqueue(encoder.encode(": ping\n\n"));
+          safeEnqueue(controller, encoder.encode(": ping\n\n"));
         }, PING_INTERVAL);
 
-        // Handle abort
+        // Handle abort (client disconnect)
         req.signal.addEventListener("abort", () => {
-          isAborted = true;
-          clearInterval(pingInterval);
-          try {
-            controller.close();
-          } catch {
-            // Ignore close errors
-          }
+          safeClose(controller);
         });
       },
     });

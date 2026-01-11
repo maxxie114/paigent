@@ -1,16 +1,23 @@
 /**
  * Fireworks AI Module
  *
- * @description Exports for Fireworks AI integration including:
- * - Responses API client (recommended for GLM-4.7)
- * - Chat Completions API client (backward compatibility)
- * - ASR (Audio Speech Recognition) client
+ * @description Exports for Fireworks AI integration:
+ * - Responses API client for text generation, function calling, and reasoning
+ * - ASR (Automatic Speech Recognition) client for audio transcription
+ *
+ * @remarks
+ * This module uses the Fireworks Responses API exclusively, which provides
+ * advanced features over the Chat Completions API:
+ * - Conversation continuation via response IDs
+ * - Reasoning/thinking controls for GLM-4.7
+ * - MCP tool integration
+ * - Response storage for debugging and audit trails
  *
  * @see https://docs.fireworks.ai/api-reference/post-responses
  * @see https://fireworks.ai/models/fireworks/glm-4p7
  */
 
-// Responses API (recommended for GLM-4.7 and advanced features)
+// Responses API (primary API for all LLM interactions)
 export {
   createResponse,
   createResponseWithRetry,
@@ -33,19 +40,7 @@ export {
   type TextConfig,
 } from "./responses";
 
-// Chat Completions API (OpenAI-compatible, backward compatibility)
-export {
-  getFireworksClient,
-  callLLM,
-  callLLMWithRetry,
-  streamLLM,
-  FIREWORKS_MODELS,
-  DEFAULT_MODEL,
-  type LLMCallParams,
-  type LLMCallResponse,
-} from "./client";
-
-// ASR (Audio Speech Recognition)
+// ASR (Automatic Speech Recognition)
 export {
   transcribeAudio,
   isASRConfigured,
