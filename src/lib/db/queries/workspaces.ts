@@ -167,6 +167,22 @@ export async function addWorkspaceMember(params: {
 }
 
 /**
+ * Get a single workspace for a user.
+ *
+ * @description Returns the user's first workspace, or null if they have none.
+ * Useful for APIs that need a default workspace context.
+ *
+ * @param clerkUserId - The Clerk user ID.
+ * @returns The user's first workspace or null.
+ */
+export async function getWorkspaceForUser(
+  clerkUserId: string
+): Promise<WorkspaceDocument | null> {
+  const workspaces = await getWorkspacesForUser(clerkUserId);
+  return workspaces.length > 0 ? workspaces[0] : null;
+}
+
+/**
  * Get or create a default workspace for a user.
  *
  * @description Creates a personal workspace if the user has no workspaces.

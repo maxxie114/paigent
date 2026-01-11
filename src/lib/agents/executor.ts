@@ -6,14 +6,22 @@
  * Uses GLM-4.7 via Fireworks Responses API for LLM reasoning steps.
  * Includes Galileo observability for tracing step executions.
  *
+ * Tool calls use the x402 protocol for pay-per-request micropayments:
+ * - Makes real HTTP requests to tool endpoints
+ * - Handles 402 Payment Required responses automatically
+ * - Signs payments using CDP Server Wallet
+ * - Records payment receipts and updates budgets
+ *
  * @see paigent-studio-spec.md Section 14
  * @see https://docs.fireworks.ai/api-reference/post-responses
+ * @see https://docs.cdp.coinbase.com/x402/welcome
  */
 
-import { Db } from "mongodb";
+import { Db, ObjectId } from "mongodb";
 import {
   RunStepDocument,
   RunDocument,
+  RunGraphNode,
   StepError,
 } from "@/lib/db/collections";
 import {
@@ -26,6 +34,10 @@ import {
 } from "@/lib/db/queries/steps";
 import { getRun, updateRunStatus, updateRunHeartbeat } from "@/lib/db/queries/runs";
 import { appendRunEvent } from "@/lib/db/queries/events";
+import { getToolById, updateToolReputation, updateToolPricing } from "@/lib/db/queries/tools";
+import { getWorkspace } from "@/lib/db/queries/workspaces";
+import { checkBudgetAndDeduct } from "@/lib/db/queries/budgets";
+import { x402Fetch } from "@/lib/cdp/x402-fetch";
 import {
   callWithSystemPrompt,
   RESPONSES_API_MODELS,
@@ -86,37 +98,249 @@ function normalizeError(error: unknown): StepError {
 /**
  * Execute a tool_call step.
  *
- * @description Makes an HTTP request to the tool endpoint.
- * Handles x402 payment flows when required.
+ * @description Makes a real HTTP request to the tool endpoint with full x402
+ * payment handling. The flow is:
+ *
+ * 1. Resolve tool and endpoint from database
+ * 2. Build request URL and body from step inputs
+ * 3. Make HTTP request via x402Fetch wrapper
+ * 4. If 402 received, handle payment automatically (within budget limits)
+ * 5. Record payment receipts and update tool reputation
+ * 6. Return response data or error
+ *
+ * @param db - MongoDB database instance.
+ * @param step - The step document to execute.
+ * @param run - The parent run document.
+ * @param workerId - The worker ID for logging.
+ * @returns Step execution result with response data and metrics.
+ *
+ * @see https://docs.cdp.coinbase.com/x402/quickstart-for-buyers
  */
- 
 async function executeToolCall(
-  _db: Db,
+  db: Db,
   step: RunStepDocument,
-  _run: RunDocument,
-  _workerId: string
+  run: RunDocument,
+  workerId: string
 ): Promise<StepExecutionResult> {
-   
   const startTime = Date.now();
 
-  // For now, simulate tool call execution
-  // In production, this would make actual HTTP requests with x402 handling
-  // The x402 integration is implemented in lib/cdp/x402-fetch.ts
+  try {
+    // Get the node definition from the graph
+    const node = run.graph.nodes.find((n) => n.id === step.stepId);
+    if (!node || node.type !== "tool_call") {
+      throw new Error(`Node ${step.stepId} not found or invalid type`);
+    }
 
-  // Simulate some processing time
-  await new Promise((resolve) => setTimeout(resolve, 500 + Math.random() * 1000));
+    // Cast to get tool_call specific properties
+    const toolNode = node as RunGraphNode & {
+      toolId?: string;
+      endpoint?: { path: string; method: string };
+      requestTemplate?: Record<string, unknown>;
+      payment?: { allowed: boolean; maxAtomic?: string };
+    };
 
-  // Return simulated success
-  return {
-    status: "succeeded",
-    result: {
-      message: `Tool call ${step.stepId} executed successfully`,
-      timestamp: new Date().toISOString(),
-    },
-    metrics: {
-      latencyMs: Date.now() - startTime,
-    },
-  };
+    // Resolve tool from database
+    if (!toolNode.toolId) {
+      throw new Error(`Tool ID not specified for step ${step.stepId}`);
+    }
+
+    const tool = await getToolById(new ObjectId(toolNode.toolId));
+    if (!tool) {
+      throw new Error(`Tool ${toolNode.toolId} not found in database`);
+    }
+
+    // Determine endpoint
+    const endpointConfig = toolNode.endpoint || tool.endpoints[0];
+    if (!endpointConfig) {
+      throw new Error(`No endpoint configured for tool ${tool.name}`);
+    }
+
+    // Build the full URL
+    const fullUrl = new URL(endpointConfig.path, tool.baseUrl).toString();
+
+    // Build request body from inputs and template
+    const inputs = step.inputs || {};
+    let requestBody: Record<string, unknown> | undefined;
+
+    if (toolNode.requestTemplate) {
+      // Substitute variables in template with input values
+      requestBody = JSON.parse(
+        JSON.stringify(toolNode.requestTemplate).replace(
+          /\{\{(\w+)\}\}/g,
+          (_, key) => {
+            const value = inputs[key];
+            return typeof value === "string" ? value : JSON.stringify(value ?? "");
+          }
+        )
+      );
+    } else if (Object.keys(inputs).length > 0) {
+      // Use inputs directly as request body
+      requestBody = inputs;
+    }
+
+    // Determine method
+    const method = endpointConfig.method?.toUpperCase() || "GET";
+
+    // Build fetch options
+    const fetchInit: RequestInit = {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "User-Agent": "Paigent-Studio/1.0",
+      },
+    };
+
+    // Add body for non-GET requests
+    if (method !== "GET" && method !== "HEAD" && requestBody) {
+      fetchInit.body = JSON.stringify(requestBody);
+    }
+
+    // Determine payment limits
+    // Priority: node config > workspace per-step limit > default
+    const workspace = await getWorkspace(run.workspaceId);
+    const workspaceSettings = workspace?.settings;
+
+    const paymentAllowed = toolNode.payment?.allowed ?? workspaceSettings?.autoPayEnabled ?? false;
+    const maxPaymentAtomic =
+      toolNode.payment?.maxAtomic ||
+      workspaceSettings?.autoPayMaxPerStepAtomic ||
+      "1000000"; // Default 1 USDC
+
+    // Build allowlist from workspace settings
+    const allowlist = workspaceSettings?.toolAllowlist || [];
+
+    console.log(
+      `[Tool Call] Executing ${method} ${fullUrl} (tool: ${tool.name}, payment: ${paymentAllowed ? "allowed up to " + maxPaymentAtomic : "disabled"})`
+    );
+
+    // Log tool call initiation
+    await appendRunEvent({
+      workspaceId: step.workspaceId,
+      runId: step.runId,
+      type: "STEP_STARTED",
+      data: {
+        stepId: step.stepId,
+        toolId: tool._id.toString(),
+        toolName: tool.name,
+        url: fullUrl,
+        method,
+        paymentAllowed,
+        maxPaymentAtomic,
+      },
+      actor: { type: "system", id: workerId },
+    });
+
+    // Make the HTTP request with x402 payment handling
+    let result: { response: unknown; paid: boolean; receipt?: { id: string; amountAtomic: string; txHash?: string } };
+
+    if (paymentAllowed) {
+      // Use x402Fetch which handles 402 responses automatically
+      result = await x402Fetch(fullUrl, fetchInit, {
+        maxPaymentAtomic,
+        runId: step.runId,
+        stepId: step.stepId,
+        workspaceId: step.workspaceId,
+        toolId: tool._id,
+        allowlist,
+      });
+    } else {
+      // No payment allowed - make plain fetch request
+      const response = await fetch(fullUrl, {
+        ...fetchInit,
+        redirect: "error", // SSRF protection
+      });
+
+      // Check for 402 - if payment not allowed, this is an error
+      if (response.status === 402) {
+        throw new Error(
+          `Tool ${tool.name} requires payment (HTTP 402), but payment is not allowed for this step. ` +
+            `Enable auto-pay in workspace settings or configure payment.allowed for this node.`
+        );
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Tool request failed: ${response.status} - ${errorText}`);
+      }
+
+      result = {
+        response: await response.json(),
+        paid: false,
+      };
+    }
+
+    const latencyMs = Date.now() - startTime;
+
+    // Update tool reputation with success
+    await updateToolReputation(tool._id, true, latencyMs);
+
+    // If payment was made, update the tool's pricing hints and run budget
+    if (result.paid && result.receipt) {
+      // Update tool pricing hints based on actual payment
+      await updateToolPricing(tool._id, {
+        typicalAmountAtomic: result.receipt.amountAtomic,
+        network: run.budget?.network || "eip155:84532",
+        asset: "USDC",
+      });
+
+      // Update run budget spent (atomic increment)
+      await checkBudgetAndDeduct({
+        runId: step.runId,
+        amountAtomic: result.receipt.amountAtomic,
+      });
+
+      console.log(
+        `[Tool Call] Paid ${result.receipt.amountAtomic} atomic USDC for ${tool.name} (receipt: ${result.receipt.id})`
+      );
+    }
+
+    console.log(
+      `[Tool Call] ${tool.name} completed in ${latencyMs}ms (paid: ${result.paid})`
+    );
+
+    return {
+      status: "succeeded",
+      result: {
+        data: result.response,
+        toolName: tool.name,
+        url: fullUrl,
+        method,
+        paid: result.paid,
+        receipt: result.receipt,
+        timestamp: new Date().toISOString(),
+      },
+      metrics: {
+        latencyMs,
+        costAtomic: result.receipt?.amountAtomic,
+      },
+    };
+  } catch (error) {
+    const latencyMs = Date.now() - startTime;
+    console.error(`[Tool Call] Step ${step.stepId} failed:`, error);
+
+    // Try to update tool reputation with failure
+    const node = run.graph.nodes.find((n) => n.id === step.stepId);
+    if (node && (node as RunGraphNode & { toolId?: string }).toolId) {
+      try {
+        await updateToolReputation(
+          new ObjectId((node as RunGraphNode & { toolId?: string }).toolId!),
+          false,
+          latencyMs
+        );
+      } catch {
+        // Ignore reputation update errors
+      }
+    }
+
+    return {
+      status: "failed",
+      error: normalizeError(error),
+      metrics: {
+        latencyMs,
+      },
+    };
+  }
 }
 
 /**
