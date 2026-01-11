@@ -372,7 +372,7 @@ npm run build
 3. Add environment variables
 4. Deploy
 
-The `vercel.json` configures the cron job to run every minute.
+The `vercel.json` configures the cron job to run once daily at midnight UTC (Vercel Hobby tier limitation).
 
 ### Environment Variables on Vercel
 

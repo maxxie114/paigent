@@ -166,7 +166,7 @@ async function executeCronTick(startTime: number): Promise<NextResponse> {
  * GET /api/cron/tick
  *
  * @description Processes the next batch of queued workflow steps.
- * Called by Vercel Cron every minute (configured in vercel.json).
+ * Called by Vercel Cron once daily at midnight UTC (configured in vercel.json).
  *
  * IMPORTANT: Vercel Cron Jobs use GET requests to trigger endpoints.
  * The endpoint is secured via CRON_SECRET in the Authorization header,

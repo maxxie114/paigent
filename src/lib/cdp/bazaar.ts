@@ -31,96 +31,69 @@ const DEFAULT_LIMIT = 100;
 // =============================================================================
 // Bazaar Response Types
 // =============================================================================
+//
+// These schemas match the CDP Bazaar Discovery API response format.
+// @see https://docs.cdp.coinbase.com/x402/bazaar.md
+//
+// Note: Pricing information is NOT included in discovery responses.
+// Pricing is determined at request time via 402 Payment Required headers.
+// =============================================================================
 
 /**
- * Payment acceptance requirement from a Bazaar service.
+ * Metadata for a Bazaar resource.
  *
- * @description Defines how a service accepts payment, including the payment
- * scheme, price, network, and recipient address.
+ * @description Contains input/output schema information and descriptions
+ * for the discovered endpoint.
+ *
+ * @see https://docs.cdp.coinbase.com/x402/bazaar.md
  */
-export const BazaarAcceptsSchema = z.object({
-  /** Payment scheme (e.g., "exact" for exact amount payments). */
-  scheme: z.string(),
-  /** Price in human-readable format (e.g., "$0.001") or atomic units. */
-  price: z.string().optional(),
-  /** Price amount in atomic units (for USDC, 6 decimals). */
-  amount: z.string().optional(),
-  /** Maximum amount required in atomic units. */
-  maxAmountRequired: z.string().optional(),
-  /** Network in CAIP-2 format (e.g., "eip155:8453" for Base Mainnet). */
-  network: z.string(),
-  /** Asset identifier (e.g., "USDC" or contract address). */
-  asset: z.string().optional(),
-  /** Recipient wallet address. */
-  payTo: z.string().optional(),
-  /** Recipient wallet address (alternative field name). */
-  recipient: z.string().optional(),
-});
+export const BazaarResourceMetadataSchema = z.object({
+  /** Human-readable description of the endpoint. */
+  description: z.string().optional(),
+  /** Input specification (query params or body). */
+  input: z.record(z.unknown()).optional(),
+  /** Output specification with example and schema. */
+  output: z.record(z.unknown()).optional(),
+}).passthrough(); // Allow additional fields we may not know about
 
-export type BazaarAccepts = z.infer<typeof BazaarAcceptsSchema>;
-
-/**
- * Bazaar extension metadata for a service.
- */
-export const BazaarExtensionSchema = z.object({
-  /** Whether the service is discoverable in Bazaar. */
-  discoverable: z.boolean().optional(),
-  /** Service category (e.g., "weather", "data", "ai"). */
-  category: z.string().optional(),
-  /** Tags for filtering/searching. */
-  tags: z.array(z.string()).optional(),
-});
-
-export type BazaarExtension = z.infer<typeof BazaarExtensionSchema>;
+export type BazaarResourceMetadata = z.infer<typeof BazaarResourceMetadataSchema>;
 
 /**
  * A single resource/endpoint from the Bazaar.
+ *
+ * @description Matches the actual CDP Bazaar Discovery API response format.
+ * The API returns resources with url, type, and optional metadata.
+ *
+ * @see https://docs.cdp.coinbase.com/x402/bazaar.md
  */
 export const BazaarResourceSchema = z.object({
   /** Full URL of the endpoint (including path). */
   url: z.string(),
-  /** HTTP method (e.g., "GET", "POST"). */
-  method: z.string().optional(),
-  /** Human-readable description of what the endpoint does. */
-  description: z.string().optional(),
-  /** MIME type of the response. */
-  mimeType: z.string().optional(),
-  /** Payment acceptance requirements. */
-  accepts: z.array(BazaarAcceptsSchema).optional(),
-  /** Bazaar-specific metadata. */
-  extensions: z
-    .object({
-      bazaar: BazaarExtensionSchema.optional(),
-    })
-    .optional(),
-  /** Input schema (JSON Schema format). */
-  inputSchema: z.record(z.unknown()).optional(),
-  /** Output schema (JSON Schema format). */
-  outputSchema: z.record(z.unknown()).optional(),
-  /** Quality/reputation score (0-1). */
-  qualityScore: z.number().optional(),
-  /** Service provider name. */
-  provider: z.string().optional(),
-  /** When the service was registered. */
-  registeredAt: z.string().optional(),
-  /** When the service was last verified. */
-  lastVerifiedAt: z.string().optional(),
-});
+  /** Protocol type (e.g., "http"). */
+  type: z.string().optional(),
+  /** Metadata about the endpoint including input/output schemas. */
+  metadata: BazaarResourceMetadataSchema.optional(),
+}).passthrough(); // Allow additional fields for forward compatibility
 
 export type BazaarResource = z.infer<typeof BazaarResourceSchema>;
 
 /**
  * Paginated response from the Bazaar discovery API.
+ *
+ * @description Matches the CDP Bazaar Discovery API response schema.
+ * Note: The API uses "resources" (not "items") for the array field.
+ *
+ * @see https://docs.cdp.coinbase.com/x402/bazaar.md
  */
 export const BazaarListResponseSchema = z.object({
   /** List of discovered resources. */
-  items: z.array(BazaarResourceSchema),
+  resources: z.array(BazaarResourceSchema),
   /** Total number of resources available. */
   total: z.number().optional(),
-  /** Pagination cursor for next page. */
-  nextCursor: z.string().optional(),
-  /** Whether there are more results. */
-  hasMore: z.boolean().optional(),
+  /** Number of results returned (matches limit param). */
+  limit: z.number().optional(),
+  /** Offset for pagination. */
+  offset: z.number().optional(),
 });
 
 export type BazaarListResponse = z.infer<typeof BazaarListResponseSchema>;
@@ -169,19 +142,17 @@ export type BazaarQueryOptions = {
  * @example
  * ```typescript
  * // Fetch all available services
- * const { items } = await fetchBazaarServices();
+ * const { resources } = await fetchBazaarServices();
+ * console.log(`Found ${resources.length} services`);
  *
- * // Filter by network and max price
- * const affordable = await fetchBazaarServices({
+ * // Filter by network
+ * const baseSepoliaServices = await fetchBazaarServices({
  *   network: "eip155:84532", // Base Sepolia
- *   maxPriceAtomic: "100000", // 0.1 USDC max
  * });
  *
- * // Search for specific capabilities
- * const weatherServices = await fetchBazaarServices({
- *   category: "weather",
- *   query: "forecast",
- * });
+ * // Search with pagination
+ * const page1 = await fetchBazaarServices({ limit: 20 });
+ * const page2 = await fetchBazaarServices({ limit: 20, cursor: "20" });
  * ```
  *
  * @see https://docs.cdp.coinbase.com/x402/bazaar
@@ -238,7 +209,7 @@ export async function fetchBazaarServices(
     // Validate response shape
     const validated = BazaarListResponseSchema.parse(data);
 
-    console.log(`[Bazaar] Found ${validated.items.length} services`);
+    console.log(`[Bazaar] Found ${validated.resources.length} services`);
 
     return validated;
   } catch (error) {
@@ -265,8 +236,8 @@ export async function fetchBazaarServices(
  *
  * @example
  * ```typescript
- * const { items } = await fetchBazaarServices();
- * const grouped = groupResourcesByBaseUrl(items);
+ * const { resources } = await fetchBazaarServices();
+ * const grouped = groupResourcesByBaseUrl(resources);
  *
  * for (const [baseUrl, endpoints] of grouped) {
  *   console.log(`Tool: ${baseUrl}`);
@@ -297,55 +268,17 @@ export function groupResourcesByBaseUrl(
 }
 
 /**
- * Extract pricing information from a Bazaar resource.
- *
- * @description Parses the accepts array to find the most relevant pricing
- * information for display and budget checking.
- *
- * @param resource - The Bazaar resource.
- * @returns Pricing information or undefined if free/unknown.
- */
-export function extractPricing(resource: BazaarResource): {
-  amountAtomic: string;
-  network: string;
-  asset: string;
-  recipient: string;
-} | undefined {
-  const accepts = resource.accepts?.[0];
-  if (!accepts) {
-    return undefined;
-  }
-
-  // Parse amount from various formats
-  let amountAtomic = accepts.amount || accepts.maxAmountRequired || "0";
-
-  // Handle human-readable price format (e.g., "$0.001")
-  if (accepts.price && !amountAtomic) {
-    const priceMatch = accepts.price.match(/\$?([\d.]+)/);
-    if (priceMatch) {
-      const usdAmount = parseFloat(priceMatch[1]);
-      // Convert to atomic (6 decimals for USDC)
-      amountAtomic = Math.round(usdAmount * 1_000_000).toString();
-    }
-  }
-
-  return {
-    amountAtomic,
-    network: accepts.network || "eip155:84532",
-    asset: accepts.asset || "USDC",
-    recipient: accepts.payTo || accepts.recipient || "",
-  };
-}
-
-/**
  * Convert a grouped set of Bazaar resources into a tool-compatible format.
  *
  * @description Transforms Bazaar resources into the format expected by our
  * tools collection, including endpoints, pricing hints, and reputation.
+ * Handles the CDP Bazaar API response format where metadata is nested.
  *
  * @param baseUrl - The base URL for the tool.
  * @param resources - List of endpoints under this base URL.
  * @returns Tool-compatible object.
+ *
+ * @see https://docs.cdp.coinbase.com/x402/bazaar.md
  */
 export function convertToToolFormat(
   baseUrl: string,
@@ -374,27 +307,26 @@ export function convertToToolFormat(
     asset?: string;
   };
 } {
-  // Use first resource's provider or derive from URL
-  const firstResource = resources[0];
+  // Derive name from hostname
   let name: string;
   try {
     const url = new URL(baseUrl);
-    name = firstResource?.provider || url.hostname.split(".")[0] || "Unknown Service";
+    name = url.hostname.split(".")[0] || "Unknown Service";
   } catch {
     name = "Unknown Service";
   }
 
-  // Aggregate descriptions
+  // Aggregate descriptions from metadata
   const descriptions = resources
-    .filter((r) => r.description)
-    .map((r) => r.description!)
+    .filter((r) => r.metadata?.description)
+    .map((r) => r.metadata!.description!)
     .slice(0, 3);
   const description =
     descriptions.length > 0
       ? descriptions.join(". ")
       : `x402-compatible service at ${baseUrl}`;
 
-  // Convert endpoints
+  // Convert endpoints - extract info from URL and metadata
   const endpoints = resources.map((r) => {
     let path: string;
     try {
@@ -404,12 +336,24 @@ export function convertToToolFormat(
       path = "/";
     }
 
+    // Try to determine method from metadata.input if available
+    // The input field may contain HTTP method info like { type: "http", method: "GET", ... }
+    let method = "GET";
+    const inputInfo = r.metadata?.input as Record<string, unknown> | undefined;
+    if (inputInfo?.method && typeof inputInfo.method === "string") {
+      method = inputInfo.method.toUpperCase();
+    }
+
+    // Extract schemas from metadata
+    const inputSchema = inputInfo as Record<string, unknown> | undefined;
+    const outputSchema = r.metadata?.output as Record<string, unknown> | undefined;
+
     return {
       path,
-      method: (r.method?.toUpperCase() || "GET") as "GET" | "POST" | "PUT" | "DELETE" | "PATCH",
-      description: r.description,
-      requestSchema: r.inputSchema,
-      responseSchema: r.outputSchema,
+      method: method as "GET" | "POST" | "PUT" | "DELETE" | "PATCH",
+      description: r.metadata?.description,
+      requestSchema: inputSchema,
+      responseSchema: outputSchema,
     };
   });
 
@@ -419,29 +363,8 @@ export function convertToToolFormat(
       arr.findIndex((e) => e.path === ep.path && e.method === ep.method) === idx
   );
 
-  // Calculate aggregate reputation from quality scores
-  const qualityScores = resources
-    .filter((r) => typeof r.qualityScore === "number")
-    .map((r) => r.qualityScore!);
-  const avgQuality =
-    qualityScores.length > 0
-      ? qualityScores.reduce((a, b) => a + b, 0) / qualityScores.length
-      : 0.8; // Default to 0.8 if no scores
-
-  // Find latest verification
-  const verificationDates = resources
-    .filter((r) => r.lastVerifiedAt)
-    .map((r) => new Date(r.lastVerifiedAt!))
-    .filter((d) => !isNaN(d.getTime()));
-  const lastVerified =
-    verificationDates.length > 0
-      ? new Date(Math.max(...verificationDates.map((d) => d.getTime())))
-      : undefined;
-
-  // Extract pricing from first priced endpoint
-  const pricedResource = resources.find((r) => r.accepts && r.accepts.length > 0);
-  const pricing = pricedResource ? extractPricing(pricedResource) : undefined;
-
+  // Default reputation - the Bazaar API doesn't provide quality scores in current response
+  // We default to reasonable values; actual metrics would need to be tracked over time
   return {
     source: "bazaar" as const,
     name: name.charAt(0).toUpperCase() + name.slice(1),
@@ -449,18 +372,14 @@ export function convertToToolFormat(
     baseUrl,
     endpoints: uniqueEndpoints,
     reputation: {
-      successRate: avgQuality,
-      avgLatencyMs: 500, // Default, would need actual metrics
+      successRate: 0.8, // Default optimistic value
+      avgLatencyMs: 500, // Default estimate
       disputeRate: 0,
-      lastVerifiedAt: lastVerified,
+      lastVerifiedAt: undefined,
     },
-    pricingHints: pricing
-      ? {
-          typicalAmountAtomic: pricing.amountAtomic,
-          network: pricing.network,
-          asset: pricing.asset,
-        }
-      : undefined,
+    // Note: The CDP Bazaar API currently doesn't include pricing in discovery response
+    // Pricing is determined at request time via 402 response headers
+    pricingHints: undefined,
   };
 }
 
@@ -492,22 +411,22 @@ export async function fetchBazaarAsTools(
 ): Promise<
   Array<ReturnType<typeof convertToToolFormat>>
 > {
-  const { items } = await fetchBazaarServices(options);
+  const { resources } = await fetchBazaarServices(options);
 
-  if (items.length === 0) {
+  if (resources.length === 0) {
     console.log("[Bazaar] No services found");
     return [];
   }
 
-  const grouped = groupResourcesByBaseUrl(items);
+  const grouped = groupResourcesByBaseUrl(resources);
   const tools: Array<ReturnType<typeof convertToToolFormat>> = [];
 
-  for (const [baseUrl, resources] of grouped) {
-    const tool = convertToToolFormat(baseUrl, resources);
+  for (const [baseUrl, groupedResources] of grouped) {
+    const tool = convertToToolFormat(baseUrl, groupedResources);
     tools.push(tool);
   }
 
-  console.log(`[Bazaar] Converted ${tools.length} tools from ${items.length} endpoints`);
+  console.log(`[Bazaar] Converted ${tools.length} tools from ${resources.length} endpoints`);
 
   return tools;
 }
