@@ -135,12 +135,26 @@ export function repairJson(text: string): string {
  * Extract JSON with repair attempts.
  *
  * @description First tries to extract JSON normally, then attempts repair
- * if the initial extraction fails.
+ * if the initial extraction fails. Also handles edge cases like empty strings
+ * and provides better diagnostic information.
  *
  * @param text - The text potentially containing JSON.
+ * @param options - Optional configuration for extraction.
+ * @param options.debug - If true, log diagnostic information on failure.
  * @returns The parsed JSON value, or undefined if extraction fails.
  */
-export function extractJsonWithRepair(text: string): unknown | undefined {
+export function extractJsonWithRepair(
+  text: string,
+  options?: { debug?: boolean }
+): unknown | undefined {
+  // Handle empty or whitespace-only input
+  if (!text || text.trim().length === 0) {
+    if (options?.debug) {
+      console.warn("[JSON Parser] Input is empty or whitespace-only");
+    }
+    return undefined;
+  }
+
   // Try normal extraction first
   const direct = extractFirstJsonValue(text);
   if (direct !== undefined) {
@@ -149,7 +163,72 @@ export function extractJsonWithRepair(text: string): unknown | undefined {
 
   // Try with repairs
   const repaired = repairJson(text);
-  return extractFirstJsonValue(repaired);
+  const fromRepaired = extractFirstJsonValue(repaired);
+  if (fromRepaired !== undefined) {
+    return fromRepaired;
+  }
+
+  // Last resort: try to find JSON between common wrapper patterns
+  const lastResort = extractJsonFromWrappers(text);
+  if (lastResort !== undefined) {
+    return lastResort;
+  }
+
+  if (options?.debug) {
+    // Log diagnostic information for debugging
+    console.warn("[JSON Parser] Failed to extract JSON from response");
+    console.warn("[JSON Parser] Input length:", text.length);
+    console.warn("[JSON Parser] First 500 chars:", text.slice(0, 500));
+    console.warn("[JSON Parser] Last 500 chars:", text.slice(-500));
+  }
+
+  return undefined;
+}
+
+/**
+ * Extract JSON from common LLM wrapper patterns.
+ *
+ * @description Handles cases where LLMs wrap JSON in markdown, XML-style tags,
+ * or other common patterns that the standard extraction might miss.
+ *
+ * @param text - The text potentially containing wrapped JSON.
+ * @returns The parsed JSON value, or undefined if extraction fails.
+ */
+function extractJsonFromWrappers(text: string): unknown | undefined {
+  // Common wrapper patterns that LLMs might use
+  const patterns = [
+    // Markdown code blocks with various language tags
+    /```(?:json|JSON|javascript|js|typescript|ts)?\s*\n?([\s\S]*?)\n?```/,
+    // XML-style tags
+    /<json>([\s\S]*?)<\/json>/i,
+    /<output>([\s\S]*?)<\/output>/i,
+    /<response>([\s\S]*?)<\/response>/i,
+    // Quoted JSON
+    /"(\\{[\s\S]*?\\})"/,
+    // After "Here is" or similar phrases
+    /(?:here(?:'s| is) (?:the )?(?:json|output|response|result):?\s*)([\s\S]*)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      const candidate = match[1].trim();
+      // Unescape if it was a quoted string
+      const unescaped = candidate.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+
+      try {
+        return JSON.parse(unescaped);
+      } catch {
+        // Try with bracket extraction
+        const extracted = extractFirstJsonValue(unescaped);
+        if (extracted !== undefined) {
+          return extracted;
+        }
+      }
+    }
+  }
+
+  return undefined;
 }
 
 /**

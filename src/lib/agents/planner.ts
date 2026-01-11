@@ -193,12 +193,33 @@ export async function planWorkflow(input: PlannerInput): Promise<PlannerResult> 
       totalLatencyMs += response.latencyMs;
       totalTokens += response.usage.totalTokens;
 
-      // Extract JSON from response
-      const extracted = extractJsonWithRepair(response.text);
+      // Log raw response for debugging if text is empty or very short
+      if (!response.text || response.text.trim().length < 10) {
+        console.warn(
+          `[Planner] Attempt ${attempts}: Response text is empty or very short.`,
+          {
+            textLength: response.text?.length ?? 0,
+            responseId: response.id,
+            rawOutputItems: response.raw.output.length,
+            status: response.raw.status,
+          }
+        );
+        // Log the raw output structure for debugging
+        console.warn(
+          "[Planner] Raw output structure:",
+          JSON.stringify(response.raw.output, null, 2).slice(0, 2000)
+        );
+      }
+
+      // Extract JSON from response with debug logging enabled
+      const extracted = extractJsonWithRepair(response.text, { debug: true });
 
       if (extracted === undefined) {
-        lastError = "No valid JSON found in response";
-        userPrompt = createRetryPrompt(response.text, lastError);
+        // Provide more context in the error message
+        const truncatedResponse = response.text?.slice(0, 500) ?? "(empty response)";
+        lastError = `No valid JSON found in response. Response preview: ${truncatedResponse}`;
+        console.error(`[Planner] Attempt ${attempts}: ${lastError}`);
+        userPrompt = createRetryPrompt(response.text, "No valid JSON found in response. Please output ONLY valid JSON with no additional text.");
         continue;
       }
 
