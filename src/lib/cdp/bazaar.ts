@@ -103,20 +103,31 @@ export type BazaarPaymentAccept = z.infer<typeof BazaarPaymentAcceptSchema>;
 /**
  * A single item/endpoint from the Bazaar discovery API.
  *
- * @description Matches the actual CDP Bazaar Discovery API response format.
- * The API returns items with url, accepts array, and optional metadata.
+ * @description The CDP Bazaar API documentation is inconsistent:
+ * - API Reference shows: { url, type, metadata }
+ * - Quickstart shows: items with { accepts } array
  *
+ * This schema is permissive to handle the actual API response which may differ
+ * from documentation. All fields are optional to allow discovery of actual structure.
+ *
+ * @see https://docs.cdp.coinbase.com/x402/bazaar#response-schema
  * @see https://docs.cdp.coinbase.com/x402/quickstart-for-buyers
  */
 export const BazaarItemSchema = z.object({
-  /** Full URL of the endpoint (including path). */
-  url: z.string(),
+  /** Full URL of the endpoint (API Reference format). */
+  url: z.string().optional(),
+  /** Endpoint URL (alternative field name). */
+  endpoint: z.string().optional(),
+  /** Resource URI (alternative field name). */
+  uri: z.string().optional(),
   /** Protocol type (e.g., "http"). */
   type: z.string().optional(),
-  /** Payment acceptance configurations. */
+  /** Payment acceptance configurations (Quickstart format). */
   accepts: z.array(BazaarPaymentAcceptSchema).optional(),
   /** Human-readable description of the endpoint. */
   description: z.string().optional(),
+  /** Name of the service. */
+  name: z.string().optional(),
   /** MIME type of the response. */
   mimeType: z.string().optional(),
   /** Metadata about the endpoint including input/output schemas. */
@@ -126,13 +137,27 @@ export const BazaarItemSchema = z.object({
 export type BazaarItem = z.infer<typeof BazaarItemSchema>;
 
 /**
+ * Extract the URL from a Bazaar item, checking multiple possible field names.
+ *
+ * @description The CDP Bazaar API may use different field names for the URL
+ * depending on the version or format. This function checks all known possibilities.
+ *
+ * @param item - The Bazaar item to extract the URL from.
+ * @returns The URL string, or undefined if not found.
+ */
+export function extractItemUrl(item: BazaarItem): string | undefined {
+  // Check known URL field names
+  return item.url ?? item.endpoint ?? item.uri ?? (item as Record<string, unknown>).resource as string | undefined;
+}
+
+/**
  * Raw paginated response from the Bazaar discovery API.
  *
  * @description The CDP Bazaar API has inconsistent documentation:
  * - API Reference (https://docs.cdp.coinbase.com/x402/bazaar#api-reference) shows `resources`
  * - Quickstart examples (https://docs.cdp.coinbase.com/x402/quickstart-for-buyers) show `items`
  *
- * This schema accepts both formats for maximum compatibility.
+ * This schema is maximally permissive to handle whatever the actual API returns.
  *
  * @see https://docs.cdp.coinbase.com/x402/bazaar#api-reference
  */
@@ -141,6 +166,10 @@ const BazaarRawResponseSchema = z.object({
   resources: z.array(BazaarItemSchema).optional(),
   /** List of discovered items (Quickstart format). */
   items: z.array(BazaarItemSchema).optional(),
+  /** List of services (alternative field name). */
+  services: z.array(BazaarItemSchema).optional(),
+  /** List of data (alternative field name). */
+  data: z.array(BazaarItemSchema).optional(),
   /** Total number of items available. */
   total: z.number().optional(),
   /** Number of results returned (matches limit param). */
@@ -149,8 +178,12 @@ const BazaarRawResponseSchema = z.object({
   offset: z.number().optional(),
   /** Cursor for next page. */
   cursor: z.string().optional(),
+  /** Next page cursor. */
+  nextCursor: z.string().optional(),
   /** Indicates if there are more results. */
   hasMore: z.boolean().optional(),
+  /** Count of results. */
+  count: z.number().optional(),
 }).passthrough(); // Allow additional fields for forward compatibility
 
 /**
@@ -180,33 +213,71 @@ export type BazaarListResponse = {
 /**
  * Parse and normalize the Bazaar API response.
  *
- * @description Handles both `resources` (API Reference) and `items` (Quickstart)
- * response formats, normalizing to always use `resources` for consistency.
+ * @description Handles multiple possible response formats from the CDP Bazaar API.
+ * The API documentation is inconsistent, so we try multiple field names.
  *
  * @param data - Raw API response data.
  * @returns Normalized response with `resources` array.
  * @throws {z.ZodError} If the response doesn't match expected schema.
- * @throws {Error} If neither `resources` nor `items` array is present.
+ * @throws {Error} If no array of resources can be found.
  */
 function parseBazaarResponse(data: unknown): BazaarListResponse {
+  // Log raw response structure for debugging
+  const rawData = data as Record<string, unknown>;
+  console.log("[Bazaar] Raw response structure:", {
+    keys: Object.keys(rawData),
+    types: Object.fromEntries(
+      Object.entries(rawData).map(([k, v]) => [k, Array.isArray(v) ? `array[${(v as unknown[]).length}]` : typeof v])
+    ),
+  });
+
+  // Log first item structure if we have any array
+  const firstArrayKey = Object.keys(rawData).find(k => Array.isArray(rawData[k]));
+  if (firstArrayKey) {
+    const arr = rawData[firstArrayKey] as unknown[];
+    if (arr.length > 0) {
+      const firstItem = arr[0] as Record<string, unknown>;
+      console.log(`[Bazaar] First item from '${firstArrayKey}' structure:`, {
+        keys: Object.keys(firstItem),
+        sample: JSON.stringify(firstItem).slice(0, 500),
+      });
+    }
+  }
+
   const parsed = BazaarRawResponseSchema.parse(data);
   
-  // Normalize: prefer `resources`, fall back to `items`
-  const resources = parsed.resources ?? parsed.items;
+  // Try multiple field names for the resources array
+  const resources = parsed.resources ?? parsed.items ?? parsed.services ?? parsed.data;
   
   if (!resources) {
+    // Try to find any array in the response
+    const arrayField = Object.entries(rawData).find(([, v]) => Array.isArray(v));
+    if (arrayField) {
+      console.warn(`[Bazaar] Found array in field '${arrayField[0]}' - using as resources`);
+      // Try to use this array directly
+      const rawArray = arrayField[1] as unknown[];
+      return {
+        resources: rawArray.map(item => BazaarItemSchema.parse(item)),
+        total: parsed.total ?? rawArray.length,
+        limit: parsed.limit,
+        offset: parsed.offset,
+        cursor: parsed.cursor ?? parsed.nextCursor,
+        hasMore: parsed.hasMore,
+      };
+    }
+    
     throw new Error(
-      "Bazaar API response missing both 'resources' and 'items' arrays. " +
-      "Response keys: " + Object.keys(parsed as object).join(", ")
+      "Bazaar API response contains no recognizable array of resources. " +
+      "Response keys: " + Object.keys(rawData).join(", ")
     );
   }
   
   return {
     resources,
-    total: parsed.total,
+    total: parsed.total ?? resources.length,
     limit: parsed.limit,
     offset: parsed.offset,
-    cursor: parsed.cursor,
+    cursor: parsed.cursor ?? parsed.nextCursor,
     hasMore: parsed.hasMore,
   };
 }
@@ -382,10 +453,26 @@ export function groupItemsByBaseUrl(
   items: BazaarItem[]
 ): Map<string, BazaarItem[]> {
   const grouped = new Map<string, BazaarItem[]>();
+  let skippedCount = 0;
 
   for (const item of items) {
+    // Extract URL using helper that checks multiple field names
+    const itemUrl = extractItemUrl(item);
+    
+    if (!itemUrl) {
+      // If no URL found, try to use name or description to create a pseudo-grouping
+      const name = item.name || item.description || "unknown";
+      const pseudoKey = `bazaar://${name.toLowerCase().replace(/\s+/g, "-")}`;
+      
+      const existing = grouped.get(pseudoKey) || [];
+      existing.push(item);
+      grouped.set(pseudoKey, existing);
+      skippedCount++;
+      continue;
+    }
+    
     try {
-      const url = new URL(item.url);
+      const url = new URL(itemUrl);
       const baseUrl = `${url.protocol}//${url.host}`;
 
       const existing = grouped.get(baseUrl) || [];
@@ -393,8 +480,13 @@ export function groupItemsByBaseUrl(
       grouped.set(baseUrl, existing);
     } catch {
       // Skip malformed URLs
-      console.warn(`[Bazaar] Skipping malformed URL: ${item.url}`);
+      console.warn(`[Bazaar] Skipping malformed URL: ${itemUrl}`);
+      skippedCount++;
     }
+  }
+
+  if (skippedCount > 0) {
+    console.log(`[Bazaar] ${skippedCount} items had no valid URL, grouped by name/description`);
   }
 
   return grouped;
@@ -440,13 +532,23 @@ export function convertToToolFormat(
     asset?: string;
   };
 } {
-  // Derive name from hostname
+  // Derive name from hostname or first item's name
   let name: string;
-  try {
-    const url = new URL(baseUrl);
-    name = url.hostname.split(".")[0] || "Unknown Service";
-  } catch {
-    name = "Unknown Service";
+  const firstItemName = items[0]?.name;
+  if (firstItemName) {
+    name = firstItemName;
+  } else {
+    try {
+      const url = new URL(baseUrl);
+      // Handle pseudo-URLs (bazaar://...)
+      if (url.protocol === "bazaar:") {
+        name = url.hostname || "Unknown Service";
+      } else {
+        name = url.hostname.split(".")[0] || "Unknown Service";
+      }
+    } catch {
+      name = "Unknown Service";
+    }
   }
 
   // Aggregate descriptions from items (description can be at item level or in metadata)
@@ -462,11 +564,18 @@ export function convertToToolFormat(
   // Convert endpoints - extract info from URL, description, and metadata
   const endpoints = items.map((item) => {
     let path: string;
-    try {
-      const url = new URL(item.url);
-      path = url.pathname || "/";
-    } catch {
-      path = "/";
+    const itemUrl = extractItemUrl(item);
+    
+    if (!itemUrl) {
+      // No URL, use description or name as path identifier
+      path = `/${(item.name || item.description || "endpoint").toLowerCase().replace(/\s+/g, "-")}`;
+    } else {
+      try {
+        const url = new URL(itemUrl);
+        path = url.pathname || "/";
+      } catch {
+        path = "/";
+      }
     }
 
     // Try to determine method from metadata.input if available
